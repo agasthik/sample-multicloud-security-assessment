@@ -1,0 +1,20 @@
+# Force YAML (which contains all the CloudFormation templates) to be counted
+*.yaml linguist-detectable=true
+*.yml  linguist-detectable=true
+
+# Re-label the actual CloudFormation templates so they show as CloudFormation
+# rather than plain YAML in the language bar
+aws/*.yaml   linguist-language=CloudFormation
+azure/*.yaml linguist-language=CloudFormation
+gcp/*.yaml   linguist-language=CloudFormation
+oci/*.yaml   linguist-language=CloudFormation
+
+# Hide the auto-generated Prowler check lists so they don't dominate stats
+**/checks/*.txt linguist-generated=true
+
+# Hide the drawio source files (they're editable diagrams, not code)
+*.drawio linguist-vendored=true
+
+# Keep the helper scripts out of the primary language if you don't want
+# "Shell" showing up at all — otherwise omit this line
+**/checks/*.sh linguist-vendored=true
