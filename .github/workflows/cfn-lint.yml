@@ -1,0 +1,37 @@
+name: CloudFormation Lint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.yaml"
+      - "**/*.yml"
+      - ".github/workflows/cfn-lint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cfn-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint CloudFormation templates
+        run: |
+          cfn-lint \
+            aws/1-member-roles-aws.yaml \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml

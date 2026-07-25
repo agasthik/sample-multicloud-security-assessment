@@ -1,0 +1,28 @@
+#Temp Files
+.DS_Store
+scratchpad.txt
+
+reporting/
+terraform/
+
+gcp/*.json
+
+all/
+
+TODO.txt
+
+#Various IDEs
+.claude/
+.vscode/
+.kiro/
+.codex/
+
+
+#Legacy
+archive
+*.bk
+*.bkp
+*.zip
+
+# Exclude entire .ash folder
+.ash/

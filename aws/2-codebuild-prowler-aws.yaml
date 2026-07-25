@@ -1,0 +1,815 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS Security Assessment Solution using Prowler CSPM CLI running in AWS CodeBuild
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Security assessment scan options
+        Parameters:
+          - ProwlerScanType
+          - MultiAccountScan
+          - ScanManagementAccount
+          - EmailAddress
+      - Label:
+          default: Advanced options
+        Parameters:
+          - ConcurrentAccountScans
+          - CodeBuildTimeout
+          - MultiAccountListOverride
+          - ProwlerOptions
+          - ProwlerVersion
+          - SecurityHubIntegration
+          - ProwlerRole
+
+    ParameterLabels:
+      ProwlerOptions:
+        default: Prowler options
+      ProwlerVersion:
+        default: Prowler version
+      SecurityHubIntegration:
+        default: Security Hub import
+      ProwlerScanType:
+        default: Prowler scan type
+      ProwlerRole:
+        default: Prowler role
+      MultiAccountScan:
+        default: Multi-Account scan
+      ScanManagementAccount:
+        default: Scan management account
+      MultiAccountListOverride:
+        default: Multi-Account list override
+      EmailAddress:
+        default: (Optional) Email address
+      ConcurrentAccountScans:
+        default: Concurrent account scans
+      CodeBuildTimeout:
+        default: CodeBuild timeout
+
+Parameters:
+  ProwlerOptions:
+    Description: "Output and reporting options for Prowler. The provider (aws), scan severity (from ProwlerScanType), --security-hub, and the --role ARN are added automatically."
+    Type: String
+    Default: --ignore-exit-code-3 --output-formats csv json-ocsf html
+  ProwlerVersion:
+    Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
+    Type: String
+    Default: "5.35.0"
+    AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
+    ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
+  SecurityHubIntegration:
+    Description: "Set to true to send AWS Prowler findings to AWS Security Hub. Security Hub and the Prowler product integration must be enabled in each scanned account and region."
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+  ProwlerScanType:
+    Description: "Specify which type of scan to perform. A basic scan runs 13 checks. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Type: String
+    AllowedValues:
+      - "Basic"
+      - "Intermediate"
+      - "Full"
+    Default: "Intermediate"
+  ProwlerRole:
+    Description: "The role that Prowler should assume to perform the scan."
+    Type: String
+    Default: ProwlerMemberRole
+  MultiAccountScan:
+    Description: "Set this to true to scan active AWS Organizations member accounts from a delegated administrator account. The configured ProwlerRole must exist in every scanned account."
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+  ScanManagementAccount:
+    Description: "For automatic multi-account discovery, include the Organizations management account. The member role must be deployed directly in that account because service-managed StackSets cannot deploy there."
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+  MultiAccountListOverride:
+    Description: "Specify the exact space-delimited list of account IDs to scan. Leaving this blank discovers active member accounts regardless of StackSet OU targets; ScanManagementAccount controls management account inclusion."
+    Type: String
+    Default: ""
+  EmailAddress:
+    Description: "Specify an address if you want to receive an email when the scan completes."
+    Type: String
+    Default: ""
+  ConcurrentAccountScans:
+    Description: "For multi-account scans, specify the number of accounts to scan concurrently. This is useful for large organizations with many accounts. Selecting more than three may incur additional costs."
+    Type: String
+    AllowedValues:
+      - "Three"
+      - "Six"
+      - "Twelve"
+      - "FortyEight"
+    Default: "Three"
+  CodeBuildTimeout:
+    Description: "Set the timeout for the CodeBuild job. The default is 300 minutes (5 hours)."
+    Type: Number
+    MinValue: 5
+    MaxValue: 2160
+    Default: 300
+
+Conditions:
+  CreateProwlerRole: !Equals
+    - !Ref MultiAccountScan
+    - "false"
+
+  CreateEmailNotification: !Not [!Equals [!Ref EmailAddress, ""]]
+
+  EnableSecurityHubIntegration: !Equals
+    - !Ref SecurityHubIntegration
+    - "true"
+
+Mappings:
+  ProwlerScanParameters:
+    Basic:
+      ProwlerOptions: >
+        -c
+        account_maintain_current_contact_details
+        awslambda_function_using_supported_runtimes
+        cloudtrail_multi_region_enabled
+        config_recorder_all_regions_enabled
+        ec2_securitygroup_allow_ingress_from_internet_to_any_port
+        guardduty_is_enabled
+        iam_password_policy_lowercase
+        iam_password_policy_number
+        iam_password_policy_symbol
+        iam_password_policy_uppercase
+        iam_root_mfa_enabled
+        iam_rotate_access_key_90_days
+        s3_bucket_public_access
+    Intermediate:
+      ProwlerOptions: --severity critical high
+    Full:
+      ProwlerOptions: ""
+  CodeBuildPerformanceOptionMap:
+    Three:
+      ParallelAccounts: 3
+      CodeBuildComputeType: BUILD_GENERAL1_SMALL
+    Six:
+      ParallelAccounts: 6
+      CodeBuildComputeType: BUILD_GENERAL1_MEDIUM
+    Twelve:
+      ParallelAccounts: 12
+      CodeBuildComputeType: BUILD_GENERAL1_LARGE
+    FortyEight:
+      ParallelAccounts: 48
+      CodeBuildComputeType: BUILD_GENERAL1_XLARGE
+
+Resources:
+  #This is the role that CodeBuild assumes to perform the Prowler scan
+  ProwlerIntegrationCodeBuildRole:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: Role allows * in resource policy. The role needs broad, read-only privileges to review all resources. Only the CodeBuild role created as part of this solution can assume this role.
+          - id: W28
+            reason: Resource has an explicit name so Prowler can loop through and assume it in each account.
+          - id: W76
+            reason: SPCM for IAM policy is higher than 25 due to managed polices, and additional polices. Each section of the role has a comment with the Prowler documentation describing the need for the privileges.
+    Condition: CreateProwlerRole
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/service-role/"
+      RoleName: ProwlerMemberRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              ArnEquals:
+                aws:PrincipalArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/service-role/ProwlerCodeBuildRole
+      ManagedPolicyArns:
+        # Prowler requires these managed polices to perform all the checks
+        # https://docs.prowler.cloud/en/latest/getting-started/requirements/
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/SecurityAudit"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/job-function/ViewOnlyAccess"
+
+  ProwlerAdditionsPolicy:
+    Condition: CreateProwlerRole
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Additional read-only permissions required by Prowler checks.
+      Roles:
+        - !Ref ProwlerIntegrationCodeBuildRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - account:Get*
+              - appstream:Describe*
+              - appstream:List*
+              - backup:List*
+              - backup:Get*
+              - bedrock:List*
+              - bedrock:Get*
+              - cloudtrail:GetInsightSelectors
+              - codeartifact:List*
+              - codebuild:BatchGet*
+              - codebuild:ListReportGroups
+              - cognito-idp:GetUserPoolMfaConfig
+              - dlm:Get*
+              - drs:Describe*
+              - ds:Get*
+              - ds:Describe*
+              - ds:List*
+              - dynamodb:GetResourcePolicy
+              - ec2:GetEbsEncryptionByDefault
+              - ec2:GetSnapshotBlockPublicAccessState
+              - ec2:GetInstanceMetadataDefaults
+              - ecr:Describe*
+              - ecr:GetRegistryScanningConfiguration
+              - elasticfilesystem:DescribeBackupPolicy
+              - glue:GetConnections
+              - glue:GetSecurityConfiguration*
+              - glue:SearchTables
+              - glue:GetMLTransforms
+              - lambda:GetFunction*
+              - lightsail:GetRelationalDatabases
+              - logs:FilterLogEvents
+              - macie2:GetMacieSession
+              - macie2:GetAutomatedDiscoveryConfiguration
+              - s3:GetAccountPublicAccessBlock
+              - shield:DescribeProtection
+              - shield:GetSubscriptionState
+              - securityhub:GetFindings
+              - servicecatalog:Describe*
+              - servicecatalog:List*
+              - ssm:DescribeDocumentPermission
+              - ssm:GetDocument
+              - ssm-incidents:List*
+              - states:ListTagsForResource
+              - support:Describe*
+              - tag:GetTagKeys
+              - wellarchitected:List*
+            Effect: Allow
+            Resource: "*"
+          - Action:
+              - securityhub:BatchImportFindings
+            Effect: Allow
+            Resource: !Sub "arn:${AWS::Partition}:securityhub:*::product/prowler/prowler"
+            Condition:
+              StringEquals:
+                securityhub:TargetAccount: !Sub "${AWS::AccountId}"
+          - Action:
+              - apigateway:GET
+            Effect: Allow
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:*::/restapis/*
+              - !Sub arn:${AWS::Partition}:apigateway:*::/apis/*
+
+  ProwlerFindingsBucket:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "aws-prowler-findings-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  ProwlerFindingsBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref ProwlerFindingsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Principal: "*"
+            Action: "s3:*"
+            Effect: Deny
+            Resource:
+              - !Sub "${ProwlerFindingsBucket.Arn}"
+              - !Sub "${ProwlerFindingsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  CodeBuildStartBuild:
+    Type: Custom::CodeBuildStartBuild
+    DependsOn:
+      - CodeBuildStartBuildLogsGroup
+      - ProwlerLogGroup
+    Properties:
+      ServiceToken: !GetAtt CodeBuildStartBuildLambda.Arn
+      ProjectName: !Ref ProwlerCodeBuild
+
+  CodeBuildStartBuildLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Sub ${AWS::AccountId}
+      Path: /
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  CodeBuildStartBuildLambdaPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows the scan trigger Lambda function to start the Prowler CodeBuild project.
+      Roles:
+        - !Ref CodeBuildStartBuildLambdaRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "codebuild:StartBuild"
+            Resource: !GetAtt ProwlerCodeBuild.Arn
+
+  CodeBuildStartBuildLogsGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: CloudWatch Logs protects data at rest using encryption. All log groups are encrypted. By default, the CloudWatch Logs service manages the server-side encryption keys.
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CodeBuildStartBuildLambda}"
+      RetentionInDays: 90
+
+  CodeBuildStartBuildLambda:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: The CodeBuildStartBuildLambdaRole gives Lambda access to write CloudWatch logs.
+          - id: W89
+            reason: Lambda is not deployed inside of a VPC. The Lambda function is used to start the CodeBuild job as a custom CloudFormation resource.
+          - id: W92
+            reason: Reserved concurrent executions is not set.
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !Sub ${CodeBuildStartBuildLambdaRole.Arn}
+      Timeout: 120
+      Runtime: python3.12
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+          from botocore.exceptions import ClientError
+          import cfnresponse
+
+          def startBuild(event, context):
+            responseData = {}
+            cb = boto3.client('codebuild')
+            try:
+              print("Starting build...")
+              response = cb.start_build(projectName=event['ResourceProperties']['ProjectName'])
+              responseData['buildID'] = response['build']['id']
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+            except ClientError as e:
+              print("Failed to start build")
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+          def no_op(event, context):
+            responseData = {}
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+
+          def lambda_handler(event,context):
+            request_type = event.get('RequestType', 'Direct')
+            print(f"Received {request_type} request for CodeBuild start trigger")
+            if request_type == 'Create':
+              startBuild(event, context)
+            else:
+              no_op(event,context)
+
+  #This is the role that has privileges to assume Prowler member roles
+  ProwlerCodeBuildRole:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: AWS Organizations account-discovery actions do not support resource-level permissions.
+          - id: W28
+            reason: This role is given an explicit name to further restrict the more permissive ProwlerMemberRole to only be assumed by this role.
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/service-role/"
+      RoleName: ProwlerCodeBuildRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/AWSProwler-${AWS::StackName}"
+
+  ProwlerCodeBuildPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows CodeBuild to write logs, upload reports, assume member roles, and list organization accounts.
+      Roles:
+        - !Ref ProwlerCodeBuildRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Effect: Allow
+            Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/AWSProwler-${AWS::StackName}*"
+          - Action:
+              - s3:PutObject
+            Effect: Allow
+            Resource: !Sub "${ProwlerFindingsBucket.Arn}/*"
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Resource: !Sub "arn:${AWS::Partition}:iam::*:role/service-role/${ProwlerRole}"
+          - Action:
+              - organizations:ListAccounts
+              - organizations:DescribeAccount
+              - organizations:DescribeOrganization
+              - organizations:ListTagsForResource
+            Effect: Allow
+            Resource: "*"
+
+  ProwlerCodeBuild:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W32
+            reason: CodeBuild uses the managed KMS key for S3.
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "AWSProwler-${AWS::StackName}"
+      Environment:
+        ComputeType:
+          !FindInMap [
+            CodeBuildPerformanceOptionMap,
+            !Ref ConcurrentAccountScans,
+            "CodeBuildComputeType",
+          ]
+        Image: "aws/codebuild/amazonlinux-x86_64-standard:6.0"
+        Type: "LINUX_CONTAINER"
+        HostKernel: "LINUX_KERNEL_6"
+        EnvironmentVariables:
+          - Name: BUCKET_REPORT
+            Value: !Ref ProwlerFindingsBucket
+            Type: PLAINTEXT
+          - Name: PROWLER_VERSION
+            Value: !Ref ProwlerVersion
+            Type: PLAINTEXT
+          - Name: PROWLER_OPTIONS
+            Value: !Ref "ProwlerOptions"
+            Type: PLAINTEXT
+          - Name: PROWLER_SCAN_OPTIONS
+            Value:
+              !FindInMap [
+                ProwlerScanParameters,
+                !Ref ProwlerScanType,
+                "ProwlerOptions",
+              ]
+            Type: PLAINTEXT
+          - Name: SECURITY_HUB_OPTIONS
+            Value: !If [EnableSecurityHubIntegration, "--security-hub", ""]
+            Type: PLAINTEXT
+          - Name: PROWLER_ROLE
+            Value: !Ref ProwlerRole
+            Type: PLAINTEXT
+          - Name: MULTI_ACCOUNT_SCAN
+            Value: !Ref MultiAccountScan
+            Type: PLAINTEXT
+          - Name: SCAN_MANAGEMENT_ACCOUNT
+            Value: !Ref ScanManagementAccount
+            Type: PLAINTEXT
+          - Name: MULTI_ACCOUNT_LIST_OVERRIDE
+            Value: !Ref MultiAccountListOverride
+            Type: PLAINTEXT
+          - Name: AWS_PARTITION
+            Value: !Sub ${AWS::Partition}
+            Type: PLAINTEXT
+          - Name: AWS_ACCOUNT_ID
+            Value: !Sub ${AWS::AccountId}
+            Type: PLAINTEXT
+          - Name: PARALLEL_ACCOUNTS
+            Value:
+              !FindInMap [
+                CodeBuildPerformanceOptionMap,
+                !Ref ConcurrentAccountScans,
+                "ParallelAccounts",
+              ]
+            Type: PLAINTEXT
+      Description: "Prowler security assessment for AWS environments"
+      ServiceRole: !GetAtt ProwlerCodeBuildRole.Arn
+      TimeoutInMinutes: !Ref CodeBuildTimeout
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - echo "Installing Prowler and dependencies..."
+                - |
+                  if [ "$PROWLER_VERSION" = "latest" ]; then
+                    pip3 install -q prowler
+                  else
+                    pip3 install -q "prowler==${PROWLER_VERSION}"
+                  fi
+                - export PROWLER_INSTALLED_VERSION="$(prowler --version 2>/dev/null || prowler -v)"
+                - echo "$PROWLER_INSTALLED_VERSION"
+            build:
+              commands:
+                - |
+                  # Build the shared Prowler command as an array so that empty
+                  # options (e.g. Full scan or disabled Security Hub) are skipped
+                  # rather than passed as empty arguments. Each invocation appends
+                  # its own per-account --role ARN.
+                  base_cmd=(prowler aws -b)
+                  read -r -a prowler_options <<< "$PROWLER_OPTIONS"
+                  base_cmd+=("${prowler_options[@]}")
+                  if [[ -n "$PROWLER_SCAN_OPTIONS" ]]; then
+                      read -r -a prowler_scan_options <<< "$PROWLER_SCAN_OPTIONS"
+                      base_cmd+=("${prowler_scan_options[@]}")
+                  fi
+                  if [[ -n "$SECURITY_HUB_OPTIONS" ]]; then
+                      base_cmd+=("$SECURITY_HUB_OPTIONS")
+                  fi
+
+                  if [[ $MULTI_ACCOUNT_SCAN = 'true' ]]; then
+
+                      echo "Running multi-account scan."
+
+                      if [[ $MULTI_ACCOUNT_LIST_OVERRIDE != '' ]]; then
+                          echo "Using account overrides."
+                          account_list=$MULTI_ACCOUNT_LIST_OVERRIDE
+                      elif [[ $MULTI_ACCOUNT_LIST_OVERRIDE = '' ]]; then
+                          echo "Using accounts from aws organizations."
+                          if [[ $SCAN_MANAGEMENT_ACCOUNT = 'true' ]]; then
+                              if ! account_list=$(aws organizations list-accounts --query 'Accounts[?State==`ACTIVE`].Id' --output text); then
+                                  echo "ERROR: Failed to retrieve account list from AWS Organizations"
+                                  exit 1
+                              fi
+                          else
+                              if ! management_account_id=$(aws organizations describe-organization --query 'Organization.MasterAccountId' --output text); then
+                                  echo "ERROR: Failed to retrieve the AWS Organizations management account ID"
+                                  exit 1
+                              fi
+                              if [[ -z "$management_account_id" || "$management_account_id" = "None" ]]; then
+                                  echo "ERROR: AWS Organizations returned an empty management account ID"
+                                  exit 1
+                              fi
+                              if ! account_list=$(aws organizations list-accounts --query "Accounts[?State=='ACTIVE' && Id!='${management_account_id}'].Id" --output text); then
+                                  echo "ERROR: Failed to retrieve member account list from AWS Organizations"
+                                  exit 1
+                              fi
+                              echo "Skipping management account $management_account_id. Set ScanManagementAccount=true after deploying its member role to include it."
+                          fi
+                      fi
+
+                      if [[ -z "$account_list" ]]; then
+                          echo "ERROR: No accounts found to scan"
+                          exit 1
+                      fi
+
+                      echo "Using accounts $account_list."
+
+                      failed_accounts=()
+                      pids=()
+                      pid_accounts=()
+
+                      wait_for_oldest_scan() {
+                          wait "${pids[0]}"
+                          scan_status=$?
+                          if [ $scan_status -ne 0 ]; then
+                              failed_accounts+=("${pid_accounts[0]}")
+                          fi
+                          pids=("${pids[@]:1}")
+                          pid_accounts=("${pid_accounts[@]:1}")
+                      }
+
+                      for accountId in $account_list; do
+                          if [ ${#pids[@]} -ge "$PARALLEL_ACCOUNTS" ]; then
+                              wait_for_oldest_scan
+                          fi
+
+                          {
+                              account_cmd=("${base_cmd[@]}" --role "arn:$AWS_PARTITION:iam::$accountId:role/service-role/$PROWLER_ROLE")
+                              printf 'Running Prowler as'; printf ' %q' "${account_cmd[@]}"; echo
+                              "${account_cmd[@]}"
+                              PROWLER_EXIT_CODE=$?
+                              if [ $PROWLER_EXIT_CODE -ne 0 ]; then
+                                  echo "ERROR: Prowler scan failed for account $accountId with exit code $PROWLER_EXIT_CODE"
+                                  exit $PROWLER_EXIT_CODE
+                              fi
+                          } &
+                          pids+=($!)
+                          pid_accounts+=($accountId)
+                      done
+
+                      while [ ${#pids[@]} -gt 0 ]; do
+                          wait_for_oldest_scan
+                      done
+
+                  elif [[ $MULTI_ACCOUNT_SCAN != 'true' ]]; then
+
+                      echo "Running a single account scan."
+                      account_cmd=("${base_cmd[@]}" --role "arn:$AWS_PARTITION:iam::$AWS_ACCOUNT_ID:role/service-role/$PROWLER_ROLE")
+                      printf 'Running Prowler as'; printf ' %q' "${account_cmd[@]}"; echo
+                      "${account_cmd[@]}"
+                      PROWLER_EXIT_CODE=$?
+                      if [ $PROWLER_EXIT_CODE -ne 0 ]; then
+                          echo "ERROR: Prowler scan failed for account $AWS_ACCOUNT_ID with exit code $PROWLER_EXIT_CODE"
+                          exit $PROWLER_EXIT_CODE
+                      fi
+
+                  fi
+
+                  if [[ ${#failed_accounts[@]} -gt 0 ]]; then
+                      echo "ERROR: Prowler scans failed for the following accounts: ${failed_accounts[*]}"
+                      echo "Check logs above for specific error details"
+                      exit 1
+                  fi
+            post_build:
+              commands:
+                - echo "CODEBUILD_BUILD_SUCCEEDING status is $CODEBUILD_BUILD_SUCCEEDING "
+                - |
+                  if [ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]; then
+                      echo "The previous build stage Failed. Exiting the post_build stage without uploading any results to S3 buckets";
+                      exit $CODEBUILD_BUILD_SUCCEEDING
+                  elif [ $CODEBUILD_BUILD_SUCCEEDING -eq 1 ]; then
+                      echo "The build stage succeeded. Now uploading reports to S3 bucket ..."
+                      mkdir -p output
+                      {
+                          echo "=== AWS Prowler Scan Summary ==="
+                          echo "Scan Date: $(date)"
+                          echo "Prowler Version: ${PROWLER_INSTALLED_VERSION:-unknown}"
+                      } > output/scan-summary.txt
+                      upload_failed=false
+                      echo "Uploading CSV reports..."
+                      if ! aws s3 cp output/ s3://$BUCKET_REPORT/output/ --recursive; then
+                          echo "ERROR: Failed to upload CSV reports"
+                          upload_failed=true
+                      fi
+
+                      if [[ $upload_failed == true ]]; then
+                          echo "ERROR: One or more S3 uploads failed. Check logs above for details."
+                          exit 1
+                      fi
+
+                      echo "All reports uploaded successfully!"
+                  fi
+  ProwlerLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: CloudWatch Logs protects data at rest using encryption. All log groups are encrypted. By default, the CloudWatch Logs service manages the server-side encryption keys.
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${ProwlerCodeBuild}"
+      RetentionInDays: 90
+
+  ProwlerScanNotificationKey:
+    Condition: CreateEmailNotification
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting Prowler SNS notifications in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowEventBridgeToPublishNotifications
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  ProwlerScanNotificationKeyAlias:
+    Condition: CreateEmailNotification
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-sns-notifications-key"
+      TargetKeyId: !Ref ProwlerScanNotificationKey
+
+  ProwlerScanNotificationTopic:
+    Condition: CreateEmailNotification
+    Type: AWS::SNS::Topic
+    Properties:
+      KmsMasterKeyId: !Ref ProwlerScanNotificationKey
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  ProwlerSnsNotificationsPolicy:
+    Condition: CreateEmailNotification
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: snsNotificationsPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Allow events
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action:
+              - sns:Publish
+            Resource: !Ref ProwlerScanNotificationTopic
+      Topics:
+        - !Ref ProwlerScanNotificationTopic
+
+  CodeBuildStateChangeRule:
+    Condition: CreateEmailNotification
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.codebuild
+        detail-type:
+          - CodeBuild Build State Change
+        detail:
+          build-status:
+            - SUCCEEDED
+            - FAILED
+            - STOPPED
+          project-name:
+            - !Ref ProwlerCodeBuild
+      State: ENABLED
+      Targets:
+        - Id: toSNS
+          Arn: !Ref ProwlerScanNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              build-status: $.detail.build-status
+            InputTemplate: !Sub >-
+              "The Prowler scan has <build-status>."
+
+              "You can view your results in the ${ProwlerFindingsBucket} bucket."
+
+Outputs:
+  ProwlerFindingsBucket:
+    Description: S3 bucket containing Prowler findings
+    Value: !Ref ProwlerFindingsBucket
+  ProwlerCodeBuildProject:
+    Description: CodeBuild project for Prowler
+    Value: !Ref ProwlerCodeBuild

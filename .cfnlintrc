@@ -1,0 +1,16 @@
+# cfn-lint configuration for the multicloud security assessment templates.
+#
+# ignore_checks:
+#   W1030 - "greater than the maximum of 480" on CodeBuild TimeoutInMinutes.
+#           False positive: cfn-lint applies the QueuedTimeoutInMinutes maximum
+#           (480) to TimeoutInMinutes, whose real limit is 2160 minutes / 36 hours.
+#           Confirmed against the AWS::CodeBuild::Project resource reference and the
+#           CodeBuild service quotas ("Build timeout in minutes" = 2160, non-adjustable).
+#           The CodeBuildTimeout parameter's MaxValue: 2160 is within service limits.
+templates:
+  - aws/*.yaml
+  - azure/*.yaml
+  - gcp/*.yaml
+  - oci/*.yaml
+ignore_checks:
+  - W1030

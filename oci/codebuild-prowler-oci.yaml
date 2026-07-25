@@ -1,0 +1,910 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: OCI Security Assessment Solution using Prowler CSPM CLI running in AWS CodeBuild
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: OCI Configuration
+        Parameters:
+          - OCIUserOCID
+          - OCITenancyOCID
+          - OCIFingerprint
+          - OCIPrivateKey
+          - OCIRegion
+          - OCICompartmentOCIDs
+      - Label:
+          default: Scan Configuration
+        Parameters:
+          - ProwlerScanType
+          - ConcurrentCompartmentScans
+          - CodeBuildTimeout
+          - ProwlerOptions
+          - ProwlerVersion
+      - Label:
+          default: Notification Options
+        Parameters:
+          - EmailAddress
+
+    ParameterLabels:
+      OCIUserOCID:
+        default: OCI User OCID
+      OCITenancyOCID:
+        default: OCI Tenancy OCID
+      OCIFingerprint:
+        default: OCI API Key Fingerprint
+      OCIPrivateKey:
+        default: OCI API Private Key (PEM)
+      OCIRegion:
+        default: OCI Region
+      OCICompartmentOCIDs:
+        default: OCI Compartment OCIDs
+      ProwlerScanType:
+        default: Prowler scan type
+      ConcurrentCompartmentScans:
+        default: Concurrent Compartment Scans
+      CodeBuildTimeout:
+        default: CodeBuild Timeout
+      ProwlerOptions:
+        default: Prowler options
+      ProwlerVersion:
+        default: Prowler Version
+      EmailAddress:
+        default: Email Address for Notifications
+
+Parameters:
+  OCIUserOCID:
+    Description: "OCI User OCID for API key authentication (e.g., ocid1.user.oc1..aaaaaaaexample)"
+    Type: String
+    AllowedPattern: ^ocid1\.user\.oc[0-9]+\..+$
+    ConstraintDescription: "Must be a valid OCI User OCID (starts with ocid1.user.oc1.)"
+
+  OCITenancyOCID:
+    Description: "OCI Tenancy OCID (e.g., ocid1.tenancy.oc1..aaaaaaaexample)"
+    Type: String
+    AllowedPattern: ^ocid1\.tenancy\.oc[0-9]+\..+$
+    ConstraintDescription: "Must be a valid OCI Tenancy OCID (starts with ocid1.tenancy.oc1.)"
+
+  OCIFingerprint:
+    Description: "Fingerprint of the OCI API signing key (e.g., aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99)"
+    Type: String
+    AllowedPattern: ^([0-9a-fA-F]{2}:){15}[0-9a-fA-F]{2}$
+    ConstraintDescription: "Must be a valid API key fingerprint in colon-separated hex format"
+
+  OCIPrivateKey:
+    Description: "PEM-encoded private key for OCI API authentication, provided as a JSON-encoded string. Because a PEM contains newlines, serialize the key file with jq before passing it (e.g. jq -Rs . < oci_api_key.pem) so the value is a valid JSON string literal."
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    ConstraintDescription: "OCI Private Key must be a JSON-encoded string (e.g. output of: jq -Rs . < oci_api_key.pem)"
+
+  OCIRegion:
+    Description: "Primary OCI region identifier (e.g., us-ashburn-1, eu-frankfurt-1)"
+    Type: String
+    MinLength: 1
+    ConstraintDescription: "OCI Region cannot be empty"
+
+  OCICompartmentOCIDs:
+    Description: "Comma-separated list of OCI Compartment OCIDs to scan (leave empty to scan the entire tenancy)"
+    Type: String
+    Default: ""
+
+  ConcurrentCompartmentScans:
+    Description: "Number of OCI compartments to scan concurrently"
+    Type: String
+    AllowedValues:
+      - "One"
+      - "Three"
+      - "Five"
+    Default: "Three"
+
+  CodeBuildTimeout:
+    Description: "Timeout for the CodeBuild job in minutes"
+    Type: Number
+    MinValue: 30
+    MaxValue: 2160
+    Default: 480
+
+  ProwlerScanType:
+    Description: "Specify which type of scan to perform. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Type: String
+    AllowedValues:
+      - "Intermediate"
+      - "Full"
+    Default: "Intermediate"
+
+  ProwlerOptions:
+    Description: "Output and reporting options for Prowler. The provider (oraclecloud) and scan severity (from ProwlerScanType) are added automatically."
+    Type: String
+    Default: "--ignore-exit-code-3 --output-formats csv json-ocsf html"
+
+  ProwlerVersion:
+    Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
+    Type: String
+    Default: "5.35.0"
+    AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
+    ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
+
+  EmailAddress:
+    Description: "Email address to receive scan completion notifications (optional)"
+    Type: String
+    Default: ""
+
+Conditions:
+  HasEmailNotification: !Not [!Equals [!Ref EmailAddress, ""]]
+
+Mappings:
+  ProwlerScanParameters:
+    Intermediate:
+      ProwlerOptions: --severity critical high
+    Full:
+      ProwlerOptions: ""
+  ConcurrentScanMap:
+    One:
+      MaxConcurrent: 1
+      CodeBuildComputeType: BUILD_GENERAL1_SMALL
+    Three:
+      MaxConcurrent: 3
+      CodeBuildComputeType: BUILD_GENERAL1_MEDIUM
+    Five:
+      MaxConcurrent: 5
+      CodeBuildComputeType: BUILD_GENERAL1_LARGE
+
+Resources:
+  # KMS Key for Secrets Manager encryption
+  SecretsManagerKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting Secrets Manager secrets in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+  SecretsManagerKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-secrets-key"
+      TargetKeyId: !Ref SecretsManagerKMSKey
+
+  # OCI Private Key Secret
+  OCICredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "${AWS::StackName}-oci-credentials"
+      Description: "JSON-encoded OCI API private key for Prowler OCI scanning"
+      KmsKeyId: !Ref SecretsManagerKMSKey
+      SecretString: !Ref OCIPrivateKey
+
+  # S3 Bucket for Prowler OCI findings
+  OCIProwlerFindingsBucket:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "oci-prowler-findings-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # S3 Bucket Policy
+  OCIProwlerFindingsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OCIProwlerFindingsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Principal: "*"
+            Action: "s3:*"
+            Effect: Deny
+            Resource:
+              - !Sub "${OCIProwlerFindingsBucket.Arn}"
+              - !Sub "${OCIProwlerFindingsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCodeBuildAccess
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt OCIProwlerCodeBuildRole.Arn
+            Action:
+              - "s3:PutObject"
+              - "s3:ListBucket"
+            Resource:
+              - !Sub "${OCIProwlerFindingsBucket.Arn}"
+              - !Sub "${OCIProwlerFindingsBucket.Arn}/*"
+
+  # IAM Role for CodeBuild
+  OCIProwlerCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/service-role/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/OCIProwler-${AWS::StackName}"
+      Policies:
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Effect: Allow
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/OCIProwler*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                Effect: Allow
+                Resource:
+                  - !Sub "${OCIProwlerFindingsBucket.Arn}"
+                  - !Sub "${OCIProwlerFindingsBucket.Arn}/*"
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "secretsmanager:GetSecretValue"
+                Effect: Allow
+                Resource: !Ref OCICredentialsSecret
+              - Action:
+                  - "kms:Decrypt"
+                Effect: Allow
+                Resource: !GetAtt SecretsManagerKMSKey.Arn
+
+  # Lambda Role for triggering CodeBuild
+  OCIProwlerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuilds"
+                Resource: !GetAtt OCIProwlerCodeBuildProject.Arn
+
+  # CloudWatch Logs Group for Lambda
+  OCIProwlerLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${OCIProwlerLambdaFunction}"
+      RetentionInDays: 90
+
+  # Lambda Function to start CodeBuild
+  OCIProwlerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "OCIProwlerTrigger-${AWS::StackName}"
+      Handler: index.lambda_handler
+      Role: !GetAtt OCIProwlerLambdaRole.Arn
+      Runtime: python3.12
+      Timeout: 300
+      Environment:
+        Variables:
+          CODEBUILD_PROJECT_NAME: !Ref OCIProwlerCodeBuildProject
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              request_type = event.get('RequestType', 'Direct')
+              logical_resource_id = event.get('LogicalResourceId', 'DirectInvocation')
+              print(f"Received {request_type} request for {logical_resource_id}")
+
+              # Handle CloudFormation custom resource
+              if 'RequestType' in event:
+                  return handle_cloudformation_event(event, context)
+
+              # Handle direct invocation
+              return start_prowler_scan(event, context)
+
+          def handle_cloudformation_event(event, context):
+              try:
+                  if event['RequestType'] == 'Create':
+                      result = start_prowler_scan(event, context)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, result)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Exception Occurred: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+          def start_prowler_scan(event, context):
+              codebuild = boto3.client('codebuild')
+              project_name = os.environ['CODEBUILD_PROJECT_NAME']
+
+              try:
+                  print(f"Starting CodeBuild project: {project_name}")
+                  response = codebuild.start_build(projectName=project_name)
+
+                  build_id = response['build']['id']
+                  build_status = response['build']['buildStatus']
+
+                  result = {
+                      'BuildId': build_id,
+                      'BuildStatus': build_status,
+                      'Message': f'OCI Prowler scan started successfully. Build ID: {build_id}'
+                  }
+
+                  print(f"Build started: {json.dumps(result)}")
+                  return result
+
+              except ClientError as e:
+                  error_msg = f"Failed to start CodeBuild project: {str(e)}"
+                  print(error_msg)
+                  raise Exception(error_msg)
+
+  # CodeBuild Project for OCI Prowler scanning
+  OCIProwlerCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "OCIProwler-${AWS::StackName}"
+      Description: "Prowler security assessment for Oracle Cloud Infrastructure environments"
+      ServiceRole: !GetAtt OCIProwlerCodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType:
+          !FindInMap [
+            ConcurrentScanMap,
+            !Ref ConcurrentCompartmentScans,
+            CodeBuildComputeType,
+          ]
+        Image: "aws/codebuild/amazonlinux-x86_64-standard:6.0"
+        HostKernel: "LINUX_KERNEL_6"
+        EnvironmentVariables:
+          - Name: S3_BUCKET
+            Value: !Ref OCIProwlerFindingsBucket
+            Type: PLAINTEXT
+          - Name: PROWLER_VERSION
+            Value: !Ref ProwlerVersion
+            Type: PLAINTEXT
+          - Name: OCI_PRIVATE_KEY_SECRET_ARN
+            Value: !Ref OCICredentialsSecret
+            Type: PLAINTEXT
+          - Name: OCI_USER_OCID
+            Value: !Ref OCIUserOCID
+            Type: PLAINTEXT
+          - Name: OCI_TENANCY_OCID
+            Value: !Ref OCITenancyOCID
+            Type: PLAINTEXT
+          - Name: OCI_FINGERPRINT
+            Value: !Ref OCIFingerprint
+            Type: PLAINTEXT
+          - Name: OCI_REGION
+            Value: !Ref OCIRegion
+            Type: PLAINTEXT
+          - Name: OCI_COMPARTMENT_OCIDS
+            Value: !Ref OCICompartmentOCIDs
+            Type: PLAINTEXT
+          - Name: PROWLER_OPTIONS
+            Value: !Ref ProwlerOptions
+            Type: PLAINTEXT
+          - Name: PROWLER_SCAN_OPTIONS
+            Value:
+              !FindInMap [
+                ProwlerScanParameters,
+                !Ref ProwlerScanType,
+                "ProwlerOptions",
+              ]
+            Type: PLAINTEXT
+          - Name: MAX_CONCURRENT_SCANS
+            Value:
+              !FindInMap [
+                ConcurrentScanMap,
+                !Ref ConcurrentCompartmentScans,
+                MaxConcurrent,
+              ]
+            Type: PLAINTEXT
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+            Type: PLAINTEXT
+      TimeoutInMinutes: !Ref CodeBuildTimeout
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - echo "=== Installing Dependencies ==="
+                - export PYTHONWARNINGS="ignore::DeprecationWarning"
+                - pip3 install --upgrade pip --quiet --root-user-action ignore
+                - |
+                  if [ "$PROWLER_VERSION" = "latest" ]; then
+                    pip3 install prowler --quiet --disable-pip-version-check --root-user-action ignore
+                  else
+                    pip3 install "prowler==${PROWLER_VERSION}" --quiet --disable-pip-version-check --root-user-action ignore
+                  fi
+                - pip3 install oci --quiet --root-user-action ignore
+                - dnf install -y jq -q
+                - echo "Dependencies installed"
+                - export PROWLER_INSTALLED_VERSION="$(prowler --version)"
+                - echo "$PROWLER_INSTALLED_VERSION"
+
+            pre_build:
+              commands:
+                - echo "=== Retrieving OCI Private Key ==="
+                - |
+                  if ! OCI_PRIVATE_KEY_JSON=$(aws secretsmanager get-secret-value --secret-id "$OCI_PRIVATE_KEY_SECRET_ARN" --query SecretString --output text 2>/dev/null); then
+                    echo "ERROR: Failed to retrieve OCI private key from Secrets Manager"
+                    echo "Secret ARN: $OCI_PRIVATE_KEY_SECRET_ARN"
+                    exit 1
+                  fi
+                  if ! OCI_PRIVATE_KEY=$(printf '%s' "$OCI_PRIVATE_KEY_JSON" | jq -r .); then
+                    echo "ERROR: OCI private key must be a valid JSON-encoded string"
+                    exit 1
+                  fi
+                  export OCI_PRIVATE_KEY
+                - |
+                  # Validate required credentials
+                  if [[ -z "$OCI_USER_OCID" || "$OCI_USER_OCID" == "null" ]]; then
+                    echo "ERROR: OCI User OCID is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$OCI_TENANCY_OCID" || "$OCI_TENANCY_OCID" == "null" ]]; then
+                    echo "ERROR: OCI Tenancy OCID is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$OCI_FINGERPRINT" || "$OCI_FINGERPRINT" == "null" ]]; then
+                    echo "ERROR: OCI Fingerprint is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$OCI_PRIVATE_KEY" || "$OCI_PRIVATE_KEY" == "null" ]]; then
+                    echo "ERROR: OCI Private Key is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$OCI_REGION" || "$OCI_REGION" == "null" ]]; then
+                    echo "ERROR: OCI Region is missing or invalid"
+                    exit 1
+                  fi
+                  echo "Credentials validated successfully"
+                - echo "=== Configuring OCI CLI ==="
+                - |
+                  # Create OCI config directory
+                  mkdir -p ~/.oci
+
+                  # Write the private key file
+                  printf '%s\n' "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
+                  chmod 600 ~/.oci/oci_api_key.pem
+
+                  # Write the OCI config file
+                  cat > ~/.oci/config <<OCIEOF
+                  [DEFAULT]
+                  user=$OCI_USER_OCID
+                  fingerprint=$OCI_FINGERPRINT
+                  tenancy=$OCI_TENANCY_OCID
+                  region=$OCI_REGION
+                  key_file=~/.oci/oci_api_key.pem
+                  OCIEOF
+
+                  chmod 600 ~/.oci/config
+
+                  echo "OCI configuration written"
+
+                - echo "=== Validating OCI Connectivity ==="
+                - |
+                  # Validate OCI connectivity using Python OCI SDK
+                  python3 -c "
+                  import oci
+                  config = oci.config.from_file()
+                  identity = oci.identity.IdentityClient(config)
+                  tenancy = identity.get_tenancy(config['tenancy']).data
+                  print(f'Connected to tenancy: {tenancy.name} ({tenancy.id})')
+                  print(f'Home region: {tenancy.home_region_key}')
+                  regions = identity.list_region_subscriptions(config['tenancy']).data
+                  print(f'Subscribed regions: {[r.region_name for r in regions]}')
+                  "
+
+                  if [ $? -eq 0 ]; then
+                    echo "OCI authentication successful"
+                  else
+                    echo "OCI authentication failed"
+                    echo "Please verify your User OCID, Tenancy OCID, Fingerprint, and Private Key"
+                    exit 1
+                  fi
+
+            build:
+              commands:
+                - echo "=== Starting OCI Prowler Security Assessment ==="
+                - |
+                  run_prowler_for_compartment() {
+                    local compartment_id=$1
+                    local -a prowler_cmd=(prowler oraclecloud -b --region "$OCI_REGION")
+
+                    if [[ -n "$compartment_id" ]]; then
+                      prowler_cmd+=(--compartment-id "$compartment_id")
+                    fi
+
+                    # Add scan severity options (from ProwlerScanType)
+                    if [[ -n "$PROWLER_SCAN_OPTIONS" && "$PROWLER_SCAN_OPTIONS" != "null" ]]; then
+                      local -a scan_options=()
+                      read -r -a scan_options <<< "$PROWLER_SCAN_OPTIONS"
+                      prowler_cmd+=("${scan_options[@]}")
+                    fi
+
+                    # Add output/reporting options
+                    if [[ -n "$PROWLER_OPTIONS" && "$PROWLER_OPTIONS" != "null" ]]; then
+                      local -a prowler_options=()
+                      read -r -a prowler_options <<< "$PROWLER_OPTIONS"
+                      prowler_cmd+=("${prowler_options[@]}")
+                    fi
+
+                    printf 'EXECUTING:'
+                    printf ' %q' "${prowler_cmd[@]}"
+                    echo
+                    echo "Prowler execution started at $(date)"
+
+                    "${prowler_cmd[@]}"
+                    local prowler_exit_code=$?
+                    if [ $prowler_exit_code -ne 0 ]; then
+                      echo "ERROR: Prowler scan failed with exit code $prowler_exit_code"
+                      return $prowler_exit_code
+                    fi
+
+                    echo "Prowler scan completed successfully"
+                  }
+
+                  failed_compartments=()
+
+                  if [[ -n "$OCI_COMPARTMENT_OCIDS" && "$OCI_COMPARTMENT_OCIDS" != "null" ]]; then
+                    IFS=',' read -ra COMPARTMENT_ARRAY <<< "$OCI_COMPARTMENT_OCIDS"
+                    pids=()
+                    pid_compartments=()
+
+                    wait_for_oldest_scan() {
+                      wait "${pids[0]}"
+                      scan_status=$?
+                      if [ $scan_status -ne 0 ]; then
+                        failed_compartments+=("${pid_compartments[0]}")
+                      fi
+                      pids=("${pids[@]:1}")
+                      pid_compartments=("${pid_compartments[@]:1}")
+                    }
+
+                    for compartment_id in "${COMPARTMENT_ARRAY[@]}"; do
+                      compartment_id=$(echo "$compartment_id" | xargs)
+                      if [[ -z "$compartment_id" ]]; then
+                        echo "WARNING: Skipping empty compartment OCID"
+                        continue
+                      fi
+
+                      if [ ${#pids[@]} -ge "$MAX_CONCURRENT_SCANS" ]; then
+                        wait_for_oldest_scan
+                      fi
+
+                      echo "=== Scanning OCI compartment: $compartment_id ==="
+                      run_prowler_for_compartment "$compartment_id" &
+                      pids+=($!)
+                      pid_compartments+=($compartment_id)
+                    done
+
+                    while [ ${#pids[@]} -gt 0 ]; do
+                      wait_for_oldest_scan
+                    done
+                  else
+                    echo "=== Scanning full OCI tenancy: $OCI_TENANCY_OCID ==="
+                    run_prowler_for_compartment ""
+                  fi
+
+                  if [[ ${#failed_compartments[@]} -gt 0 ]]; then
+                    echo "ERROR: Prowler scans failed for compartments: ${failed_compartments[*]}"
+                    exit 1
+                  fi
+
+                  echo "Checking output files..."
+                  ls -la . || echo "Failed to list directory"
+                  if [ -d "output" ]; then
+                    echo "Output directory contents:"
+                    ls -la output/ || echo "Failed to list output directory"
+                  fi
+
+            post_build:
+              commands:
+                # Always scrub the OCI credentials, regardless of build outcome
+                - rm -f ~/.oci/oci_api_key.pem ~/.oci/config
+                - echo "CODEBUILD_BUILD_SUCCEEDING status is $CODEBUILD_BUILD_SUCCEEDING"
+                - |
+                  if [ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]; then
+                    echo "ERROR: The previous build stage failed. Exiting without uploading results to S3."
+                    exit 1
+                  fi
+
+                  echo "=== Uploading Results to S3 ==="
+                  echo "Current directory contents:"
+                  ls -la . || echo "Failed to list directory"
+
+                  # Organize output files
+                  if [ ! -d "output" ]; then
+                    echo "WARNING: No output directory found, creating one..."
+                    mkdir -p output
+                    find . -maxdepth 1 \( -name "*.csv" -o -name "*.json" -o -name "*.html" -o -name "*.sarif" \) -exec cp {} output/ \; 2>/dev/null || true
+                  fi
+
+                  cd output
+
+                  # Create scan summary
+                  echo "=== OCI Prowler Scan Summary ===" > scan-summary.txt
+                  echo "Scan Date: $(date)" >> scan-summary.txt
+                  echo "Prowler Version: ${PROWLER_INSTALLED_VERSION:-unknown}" >> scan-summary.txt
+                  echo "Tenancy OCID: $OCI_TENANCY_OCID" >> scan-summary.txt
+                  echo "Region: $OCI_REGION" >> scan-summary.txt
+                  echo "Compartments: $OCI_COMPARTMENT_OCIDS" >> scan-summary.txt
+                  echo "" >> scan-summary.txt
+
+                  # List generated files
+                  echo "Generated Files:" >> scan-summary.txt
+                  find . -type f -exec ls -lh {} \; >> scan-summary.txt
+
+                  # Upload to S3 with error handling
+                  echo "Uploading all results to S3..."
+                  upload_failed=false
+                  if ! aws s3 cp . s3://$S3_BUCKET/output/ --recursive; then
+                    echo "ERROR: Failed to upload results to S3"
+                    upload_failed=true
+                  fi
+
+                  if [[ $upload_failed == true ]]; then
+                    echo "ERROR: S3 upload failed. Check logs above for details."
+                    exit 1
+                  fi
+
+                  echo "All reports uploaded successfully!"
+                  echo "Results available in S3 bucket: $S3_BUCKET"
+                  cat scan-summary.txt
+
+  # CloudWatch Logs Group for CodeBuild
+  OCIProwlerCodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${OCIProwlerCodeBuildProject}"
+      RetentionInDays: 90
+
+  # KMS Key for SNS notification encryption
+  OCIProwlerNotificationKMSKey:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting OCI Prowler SNS notifications in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowEventBridgeToPublishNotifications
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  OCIProwlerNotificationKMSKeyAlias:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-oci-sns-notifications-key"
+      TargetKeyId: !Ref OCIProwlerNotificationKMSKey
+
+  # SNS Topic for notifications (optional)
+  OCIProwlerNotificationTopic:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "OCIProwlerNotifications-${AWS::StackName}"
+      KmsMasterKeyId: !Ref OCIProwlerNotificationKMSKey
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  # SNS Topic Policy
+  OCIProwlerSNSTopicPolicy:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: OCIProwlerSNSPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridge
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action:
+              - "sns:Publish"
+            Resource: !Ref OCIProwlerNotificationTopic
+      Topics:
+        - !Ref OCIProwlerNotificationTopic
+
+  # EventBridge Rule for CodeBuild state changes
+  OCIProwlerEventBridgeRule:
+    Condition: HasEmailNotification
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "OCIProwlerBuildStateChange-${AWS::StackName}"
+      Description: "Capture CodeBuild state changes for OCI Prowler scans"
+      EventPattern:
+        source:
+          - "aws.codebuild"
+        detail-type:
+          - "CodeBuild Build State Change"
+        detail:
+          build-status:
+            - "SUCCEEDED"
+            - "FAILED"
+            - "STOPPED"
+          project-name:
+            - !Ref OCIProwlerCodeBuildProject
+      State: ENABLED
+      Targets:
+        - Id: SNSTarget
+          Arn: !Ref OCIProwlerNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              build-status: "$.detail.build-status"
+              project-name: "$.detail.project-name"
+              build-id: "$.detail.build-id"
+            InputTemplate: !Sub |
+              "OCI Prowler Security Assessment Completed
+
+              Status: <build-status>
+              Project: <project-name>
+              Build ID: <build-id>
+
+              Check your S3 bucket for detailed results: ${OCIProwlerFindingsBucket}
+
+              Scan Details:
+              - Tenancy: ${OCITenancyOCID}
+              - Region: ${OCIRegion}"
+
+  # Custom Resource to trigger initial scan
+  TriggerInitialScan:
+    Type: Custom::TriggerScan
+    DependsOn:
+      - OCIProwlerLambdaLogGroup
+      - OCIProwlerCodeBuildLogGroup
+    Properties:
+      ServiceToken: !GetAtt OCIProwlerLambdaFunction.Arn
+      TriggerUpdate: !Ref AWS::StackId
+
+Outputs:
+  S3BucketName:
+    Description: "S3 bucket containing OCI Prowler scan results"
+    Value: !Ref OCIProwlerFindingsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3Bucket"
+
+  CodeBuildProjectName:
+    Description: "CodeBuild project name for OCI Prowler scanning"
+    Value: !Ref OCIProwlerCodeBuildProject
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeBuildProject"
+
+  LambdaFunctionName:
+    Description: "Lambda function to trigger OCI Prowler scans"
+    Value: !Ref OCIProwlerLambdaFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunction"
+
+  SecretsManagerArn:
+    Description: "Secrets Manager ARN containing the JSON-encoded OCI private key"
+    Value: !Ref OCICredentialsSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-OCICredentials"
+
+  ScanConfiguration:
+    Description: "Summary of OCI scan configuration"
+    Value: !Sub |
+      OCI Prowler Scan Configuration:
+      - Tenancy: ${OCITenancyOCID}
+      - Region: ${OCIRegion}
+      - Concurrent Scans: ${ConcurrentCompartmentScans}
+
+  UsageInstructions:
+    Description: "Instructions for using the OCI Prowler scanner"
+    Value: !Sub |
+      OCI Prowler Scanner Usage:
+
+      1. Manual Trigger:
+         aws lambda invoke --function-name ${OCIProwlerLambdaFunction} response.json
+
+      2. View Results:
+         aws s3 ls s3://${OCIProwlerFindingsBucket}/output/
+
+      3. Download Results:
+         aws s3 sync s3://${OCIProwlerFindingsBucket}/output/ ./local-results/
+
+      4. Monitor Progress:
+         aws codebuild batch-get-builds --ids <build-id>
+
+      5. View Logs:
+         aws logs describe-log-streams --log-group-name /aws/codebuild/${OCIProwlerCodeBuildProject}

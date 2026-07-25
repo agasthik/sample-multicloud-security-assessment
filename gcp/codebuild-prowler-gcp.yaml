@@ -1,0 +1,1101 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: GCP Security Assessment Solution using Prowler CSPM CLI running in AWS CodeBuild
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: GCP Configuration
+        Parameters:
+          - GCPServiceAccountKey
+          - GCPProjectIds
+          - GCPOrganizationId
+      - Label:
+          default: Scan Configuration
+        Parameters:
+          - ProwlerScanType
+          - ConcurrentProjectScans
+          - CodeBuildTimeout
+          - ProwlerOptions
+          - ProwlerVersion
+      - Label:
+          default: Notification Options
+        Parameters:
+          - EmailAddress
+
+    ParameterLabels:
+      GCPServiceAccountKey:
+        default: GCP Service Account Key (JSON)
+      GCPProjectIds:
+        default: GCP Project IDs
+      GCPOrganizationId:
+        default: GCP Organization ID (Optional)
+      ProwlerScanType:
+        default: Prowler scan type
+      ConcurrentProjectScans:
+        default: Concurrent Project Scans
+      CodeBuildTimeout:
+        default: CodeBuild Timeout
+      ProwlerOptions:
+        default: Prowler options
+      ProwlerVersion:
+        default: Prowler Version
+      EmailAddress:
+        default: Email Address for Notifications
+
+Parameters:
+  GCPServiceAccountKey:
+    Description: "GCP Service Account Key in JSON format for authentication"
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    ConstraintDescription: "GCP Service Account Key cannot be empty"
+
+  GCPProjectIds:
+    Description: "Comma-separated list of GCP Project IDs to scan. Leave empty when using GCPOrganizationId for organization-wide discovery."
+    Type: String
+    Default: ""
+
+  GCPOrganizationId:
+    Description: "GCP Organization ID for organization-level scanning (optional)"
+    Type: String
+    Default: ""
+
+  ConcurrentProjectScans:
+    Description: "Number of GCP projects to scan concurrently"
+    Type: String
+    AllowedValues:
+      - "One"
+      - "Three"
+      - "Five"
+    Default: "Three"
+
+  CodeBuildTimeout:
+    Description: "Timeout for the CodeBuild job in minutes"
+    Type: Number
+    MinValue: 30
+    MaxValue: 2160
+    Default: 480
+
+  ProwlerScanType:
+    Description: "Specify which type of scan to perform. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Type: String
+    AllowedValues:
+      - "Intermediate"
+      - "Full"
+    Default: "Intermediate"
+
+  ProwlerOptions:
+    Description: "Output and reporting options for Prowler. The provider (gcp) and scan severity (from ProwlerScanType) are added automatically."
+    Type: String
+    Default: "--ignore-exit-code-3 --output-formats csv json-ocsf html"
+
+  ProwlerVersion:
+    Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
+    Type: String
+    Default: "5.35.0"
+    AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
+    ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
+
+  EmailAddress:
+    Description: "Email address to receive scan completion notifications (optional)"
+    Type: String
+    Default: ""
+
+Rules:
+  RequireGCPScanScope:
+    Assertions:
+      - Assert: !Or
+          - !Not [!Equals [!Ref GCPProjectIds, ""]]
+          - !Not [!Equals [!Ref GCPOrganizationId, ""]]
+        AssertDescription: "Specify GCPProjectIds, GCPOrganizationId, or both."
+
+Conditions:
+  HasEmailNotification: !Not [!Equals [!Ref EmailAddress, ""]]
+
+Mappings:
+  ProwlerScanParameters:
+    Intermediate:
+      ProwlerOptions: --severity critical high
+    Full:
+      ProwlerOptions: ""
+  ConcurrentScanMap:
+    One:
+      MaxConcurrent: 1
+      CodeBuildComputeType: BUILD_GENERAL1_SMALL
+    Three:
+      MaxConcurrent: 3
+      CodeBuildComputeType: BUILD_GENERAL1_MEDIUM
+    Five:
+      MaxConcurrent: 5
+      CodeBuildComputeType: BUILD_GENERAL1_LARGE
+
+Resources:
+  # KMS Key for Secrets Manager encryption
+  SecretsManagerKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting Secrets Manager secrets in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+  SecretsManagerKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-secrets-key"
+      TargetKeyId: !Ref SecretsManagerKMSKey
+
+  # GCP Service Account Key Secret
+  GCPCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "${AWS::StackName}-gcp-credentials"
+      Description: "GCP Service Account key for Prowler GCP scanning"
+      KmsKeyId: !Ref SecretsManagerKMSKey
+      SecretString: !Ref GCPServiceAccountKey
+
+  # S3 Bucket for Prowler GCP findings
+  GCPProwlerFindingsBucket:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "gcp-prowler-findings-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # S3 Bucket Policy
+  GCPProwlerFindingsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref GCPProwlerFindingsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Principal: "*"
+            Action: "s3:*"
+            Effect: Deny
+            Resource:
+              - !Sub "${GCPProwlerFindingsBucket.Arn}"
+              - !Sub "${GCPProwlerFindingsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCodeBuildAccess
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt GCPProwlerCodeBuildRole.Arn
+            Action:
+              - "s3:PutObject"
+              - "s3:ListBucket"
+            Resource:
+              - !Sub "${GCPProwlerFindingsBucket.Arn}"
+              - !Sub "${GCPProwlerFindingsBucket.Arn}/*"
+
+  # IAM Role for CodeBuild
+  GCPProwlerCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/service-role/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/GCPProwler-${AWS::StackName}"
+      Policies:
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Effect: Allow
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/GCPProwler*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                Effect: Allow
+                Resource:
+                  - !Sub "${GCPProwlerFindingsBucket.Arn}"
+                  - !Sub "${GCPProwlerFindingsBucket.Arn}/*"
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "secretsmanager:GetSecretValue"
+                Effect: Allow
+                Resource: !Ref GCPCredentialsSecret
+              - Action:
+                  - "kms:Decrypt"
+                Effect: Allow
+                Resource: !GetAtt SecretsManagerKMSKey.Arn
+
+  # Lambda Role for triggering CodeBuild
+  GCPProwlerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuilds"
+                Resource: !GetAtt GCPProwlerCodeBuildProject.Arn
+
+  # CloudWatch Logs Group for Lambda
+  GCPProwlerLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${GCPProwlerLambdaFunction}"
+      RetentionInDays: 90
+
+  # Lambda Function to start CodeBuild
+  GCPProwlerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "GCPProwlerTrigger-${AWS::StackName}"
+      Handler: index.lambda_handler
+      Role: !GetAtt GCPProwlerLambdaRole.Arn
+      Runtime: python3.12
+      Timeout: 300
+      Environment:
+        Variables:
+          CODEBUILD_PROJECT_NAME: !Ref GCPProwlerCodeBuildProject
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              request_type = event.get('RequestType', 'Direct')
+              logical_resource_id = event.get('LogicalResourceId', 'DirectInvocation')
+              print(f"Received {request_type} request for {logical_resource_id}")
+
+              # Handle CloudFormation custom resource
+              if 'RequestType' in event:
+                  return handle_cloudformation_event(event, context)
+
+              # Handle direct invocation
+              return start_prowler_scan(event, context)
+
+          def handle_cloudformation_event(event, context):
+              try:
+                  if event['RequestType'] == 'Create':
+                      result = start_prowler_scan(event, context)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, result)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+          def start_prowler_scan(event, context):
+              codebuild = boto3.client('codebuild')
+              project_name = os.environ['CODEBUILD_PROJECT_NAME']
+
+              try:
+                  print(f"Starting CodeBuild project: {project_name}")
+                  response = codebuild.start_build(projectName=project_name)
+
+                  build_id = response['build']['id']
+                  build_status = response['build']['buildStatus']
+
+                  result = {
+                      'BuildId': build_id,
+                      'BuildStatus': build_status,
+                      'Message': f'GCP Prowler scan started successfully. Build ID: {build_id}'
+                  }
+
+                  print(f"Build started: {json.dumps(result)}")
+                  return result
+
+              except ClientError as e:
+                  error_msg = f"Failed to start CodeBuild project: {str(e)}"
+                  print(error_msg)
+                  raise Exception(error_msg)
+  # CodeBuild Project for GCP Prowler scanning
+  GCPProwlerCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "GCPProwler-${AWS::StackName}"
+      Description: "Prowler security assessment for GCP multi-project environments"
+      ServiceRole: !GetAtt GCPProwlerCodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType:
+          !FindInMap [
+            ConcurrentScanMap,
+            !Ref ConcurrentProjectScans,
+            CodeBuildComputeType,
+          ]
+        Image: "aws/codebuild/amazonlinux-x86_64-standard:6.0"
+        HostKernel: "LINUX_KERNEL_6"
+        EnvironmentVariables:
+          - Name: S3_BUCKET
+            Value: !Ref GCPProwlerFindingsBucket
+            Type: PLAINTEXT
+          - Name: PROWLER_VERSION
+            Value: !Ref ProwlerVersion
+            Type: PLAINTEXT
+          - Name: GCP_SERVICE_ACCOUNT_KEY_SECRET_ARN
+            Value: !Ref GCPCredentialsSecret
+            Type: PLAINTEXT
+          - Name: GCP_PROJECT_IDS
+            Value: !Ref GCPProjectIds
+            Type: PLAINTEXT
+          - Name: GCP_ORGANIZATION_ID
+            Value: !Ref GCPOrganizationId
+            Type: PLAINTEXT
+          - Name: PROWLER_OPTIONS
+            Value: !Ref ProwlerOptions
+            Type: PLAINTEXT
+          - Name: PROWLER_SCAN_OPTIONS
+            Value:
+              !FindInMap [
+                ProwlerScanParameters,
+                !Ref ProwlerScanType,
+                "ProwlerOptions",
+              ]
+            Type: PLAINTEXT
+          - Name: MAX_CONCURRENT_SCANS
+            Value:
+              !FindInMap [
+                ConcurrentScanMap,
+                !Ref ConcurrentProjectScans,
+                MaxConcurrent,
+              ]
+            Type: PLAINTEXT
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+            Type: PLAINTEXT
+      TimeoutInMinutes: !Ref CodeBuildTimeout
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - echo "=== Installing Prowler and Google Cloud SDK ==="
+                - export PYTHONWARNINGS="ignore::DeprecationWarning"
+                - pip3 install --upgrade pip --quiet --root-user-action ignore
+                - |
+                  if [ "$PROWLER_VERSION" = "latest" ]; then
+                    pip3 install prowler --quiet --root-user-action ignore
+                  else
+                    pip3 install "prowler==${PROWLER_VERSION}" --quiet --root-user-action ignore
+                  fi
+                - export PROWLER_INSTALLED_VERSION="$(prowler --version)"
+                - echo "$PROWLER_INSTALLED_VERSION"
+                - echo "Installing Google Cloud SDK..."
+                - |
+                  # Install Google Cloud SDK
+                  curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz
+                  tar -xf google-cloud-cli-linux-x86_64.tar.gz
+                  ./google-cloud-sdk/install.sh --quiet --path-update=true
+                  rm -rf google-cloud-cli-linux-x86_64.tar.gz
+
+                  # Add gcloud to PATH
+                  export PATH=$PATH:$(pwd)/google-cloud-sdk/bin
+                  echo 'export PATH=$PATH:'$(pwd)'/google-cloud-sdk/bin' >> ~/.bashrc
+
+                  # Verify installation
+                  gcloud --version
+
+                - echo "Installing jq for JSON processing..."
+                - dnf install -y jq
+
+            pre_build:
+              commands:
+                - echo "=== Verifying tool installations ==="
+                - |
+                  # Add gcloud to PATH for this session
+                  export PATH=$PATH:$(pwd)/google-cloud-sdk/bin
+
+                  # Verify all required tools are installed
+                  echo "Checking Python version..."
+                  python3 --version
+
+                  echo "Checking pip version..."
+                  pip3 --version
+
+                  echo "Checking Prowler installation..."
+                  prowler --version
+
+                  echo "Checking Google Cloud SDK installation..."
+                  gcloud --version
+
+                  echo "Checking jq installation..."
+                  jq --version
+
+                  echo "All tools verified successfully"
+
+                - echo "=== Retrieving GCP service account key from Secrets Manager ==="
+                - |
+                  # Add gcloud to PATH
+                  export PATH=$PATH:$(pwd)/google-cloud-sdk/bin
+
+                  # Retrieve service account key with error handling
+                  if ! GCP_SERVICE_ACCOUNT_KEY=$(aws secretsmanager get-secret-value \
+                    --secret-id "$GCP_SERVICE_ACCOUNT_KEY_SECRET_ARN" \
+                    --query SecretString --output text 2>/dev/null); then
+                    echo "ERROR: Failed to retrieve GCP service account key from Secrets Manager"
+                    echo "Secret ARN: $GCP_SERVICE_ACCOUNT_KEY_SECRET_ARN"
+                    exit 1
+                  fi
+
+                  # Validate required credentials
+                  if [[ "$GCP_SERVICE_ACCOUNT_KEY" == "null" || -z "$GCP_SERVICE_ACCOUNT_KEY" ]]; then
+                    echo "ERROR: GCP Service Account Key is missing or invalid"
+                    exit 1
+                  fi
+
+                  TRIMMED_PROJECT_IDS=$(echo "${GCP_PROJECT_IDS:-}" | xargs)
+                  TRIMMED_ORGANIZATION_ID=$(echo "${GCP_ORGANIZATION_ID:-}" | xargs)
+
+                  if [[ "$TRIMMED_PROJECT_IDS" == "null" ]]; then
+                    TRIMMED_PROJECT_IDS=""
+                  fi
+
+                  if [[ "$TRIMMED_ORGANIZATION_ID" == "null" ]]; then
+                    TRIMMED_ORGANIZATION_ID=""
+                  fi
+
+                  if [[ -z "$TRIMMED_PROJECT_IDS" && -z "$TRIMMED_ORGANIZATION_ID" ]]; then
+                    echo "ERROR: Specify at least one scan scope: GCPProjectIds or GCPOrganizationId"
+                    exit 1
+                  fi
+
+                  echo "Credentials validated successfully"
+                  if [[ -n "$TRIMMED_PROJECT_IDS" ]]; then
+                    echo "Project IDs: $TRIMMED_PROJECT_IDS"
+                  fi
+                  if [[ -n "$TRIMMED_ORGANIZATION_ID" ]]; then
+                    echo "Organization ID: $TRIMMED_ORGANIZATION_ID"
+                  fi
+
+                  # Write service account key to a file with restricted (owner-only) permissions
+                  install -m 600 /dev/null /tmp/gcp-service-account.json
+                  printf '%s' "$GCP_SERVICE_ACCOUNT_KEY" > /tmp/gcp-service-account.json
+                  export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-service-account.json
+
+                - echo "=== Authenticating with Google Cloud ==="
+                - |
+                  # Add gcloud to PATH
+                  export PATH=$PATH:$(pwd)/google-cloud-sdk/bin
+
+                  # Attempt GCP authentication with retry logic
+                  MAX_RETRIES=3
+                  RETRY_COUNT=0
+
+                  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+                    echo "Attempting GCP authentication (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
+
+                    if gcloud auth activate-service-account --key-file=/tmp/gcp-service-account.json; then
+                      echo "GCP authentication successful"
+                      break
+                    else
+                      RETRY_COUNT=$((RETRY_COUNT + 1))
+                      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                        echo "WARNING: Authentication failed, retrying in 10 seconds..."
+                        sleep 10
+                      else
+                        echo "ERROR: GCP authentication failed after $MAX_RETRIES attempts"
+                        echo "Please verify your service account key and permissions"
+                        exit 1
+                      fi
+                    fi
+                  done
+
+                  TRIMMED_PROJECT_IDS=$(echo "${GCP_PROJECT_IDS:-}" | xargs)
+                  TRIMMED_ORGANIZATION_ID=$(echo "${GCP_ORGANIZATION_ID:-}" | xargs)
+
+                  if [[ "$TRIMMED_PROJECT_IDS" == "null" ]]; then
+                    TRIMMED_PROJECT_IDS=""
+                  fi
+
+                  if [[ "$TRIMMED_ORGANIZATION_ID" == "null" ]]; then
+                    TRIMMED_ORGANIZATION_ID=""
+                  fi
+
+                  if [[ -n "$TRIMMED_PROJECT_IDS" ]]; then
+                    echo "=== Verifying project access ==="
+                    gcloud projects list --format="table(projectId,name,projectNumber)" || echo "WARNING: Unable to list all accessible projects; continuing with explicit project verification"
+
+                    # Verify access to each explicitly configured project.
+                    IFS=',' read -ra RAW_PROJECT_ARRAY <<< "$TRIMMED_PROJECT_IDS"
+                    for project_id in "${RAW_PROJECT_ARRAY[@]}"; do
+                      project_id=$(echo "$project_id" | xargs)
+                      if [[ -z "$project_id" ]]; then
+                        continue
+                      fi
+
+                      echo "Verifying access to project: $project_id"
+
+                      if gcloud config set project "$project_id"; then
+                        PROJECT_NAME=$(gcloud projects describe "$project_id" --format="value(name)" 2>/dev/null || echo "Unknown")
+                        echo "Access verified for project: $PROJECT_NAME ($project_id)"
+                      else
+                        echo "ERROR: Failed to access project: $project_id"
+                        echo "Please verify the project ID and service account permissions"
+                        exit 1
+                      fi
+                    done
+
+                    echo "All explicit project access checks completed successfully"
+                  else
+                    echo "Organization-wide scan requested for organization: $TRIMMED_ORGANIZATION_ID"
+                    echo "Skipping per-project verification; Prowler will enumerate projects with the Cloud Asset API"
+                  fi
+
+            build:
+              commands:
+                - echo "=== Starting GCP Prowler Security Assessment ==="
+                - |
+                  # Add gcloud to PATH
+                  export PATH=$PATH:$(pwd)/google-cloud-sdk/bin
+
+                  PROJECT_ARRAY=()
+                  TRIMMED_PROJECT_IDS=$(echo "${GCP_PROJECT_IDS:-}" | xargs)
+                  TRIMMED_ORGANIZATION_ID=$(echo "${GCP_ORGANIZATION_ID:-}" | xargs)
+
+                  if [[ "$TRIMMED_PROJECT_IDS" == "null" ]]; then
+                    TRIMMED_PROJECT_IDS=""
+                  fi
+
+                  if [[ "$TRIMMED_ORGANIZATION_ID" == "null" ]]; then
+                    TRIMMED_ORGANIZATION_ID=""
+                  fi
+
+                  if [[ -n "$TRIMMED_PROJECT_IDS" ]]; then
+                    IFS=',' read -ra RAW_PROJECT_ARRAY <<< "$TRIMMED_PROJECT_IDS"
+                    for project_id in "${RAW_PROJECT_ARRAY[@]}"; do
+                      project_id=$(echo "$project_id" | xargs)
+                      if [[ -n "$project_id" ]]; then
+                        PROJECT_ARRAY+=("$project_id")
+                      fi
+                    done
+                  fi
+
+                  echo "Projects to scan: ${PROJECT_ARRAY[@]:-(organization discovery)}"
+
+                  add_common_prowler_options() {
+                    # Add scan severity options (from ProwlerScanType)
+                    if [[ -n "$PROWLER_SCAN_OPTIONS" && "$PROWLER_SCAN_OPTIONS" != "null" ]]; then
+                      local -a scan_options=()
+                      read -r -a scan_options <<< "$PROWLER_SCAN_OPTIONS"
+                      prowler_cmd+=("${scan_options[@]}")
+                    fi
+
+                    # Add output/reporting options
+                    if [[ -n "$PROWLER_OPTIONS" && "$PROWLER_OPTIONS" != "null" ]]; then
+                      local -a prowler_options=()
+                      read -r -a prowler_options <<< "$PROWLER_OPTIONS"
+                      prowler_cmd+=("${prowler_options[@]}")
+                    fi
+
+                    # Add credentials file and hide banner
+                    prowler_cmd+=(-b --credentials-file /tmp/gcp-service-account.json)
+                  }
+
+                  # Function to run Prowler for a single project
+                  run_prowler_for_project() {
+                    local project_id=$1
+
+                    echo "=== Scanning GCP Project: $project_id ==="
+
+                    # Set the project context
+                    gcloud config set project "$project_id"
+
+                    # Build Prowler command
+                    local -a prowler_cmd=(prowler gcp --project-ids "$project_id")
+
+                    # Add organization ID if provided
+                    if [[ -n "$TRIMMED_ORGANIZATION_ID" ]]; then
+                      prowler_cmd+=(--organization-id "$TRIMMED_ORGANIZATION_ID")
+                    fi
+
+                    add_common_prowler_options
+
+                    printf 'Executing:'
+                    printf ' %q' "${prowler_cmd[@]}"
+                    echo
+                    "${prowler_cmd[@]}"
+                    PROWLER_EXIT_CODE=$?
+
+                    if [ $PROWLER_EXIT_CODE -ne 0 ]; then
+                      echo "ERROR: Prowler scan failed for project $project_id with exit code $PROWLER_EXIT_CODE"
+                      return $PROWLER_EXIT_CODE
+                    fi
+
+                    echo "Prowler scan completed successfully for project $project_id"
+                  }
+
+                  run_prowler_for_organization() {
+                    echo "=== Scanning GCP Organization: $TRIMMED_ORGANIZATION_ID ==="
+
+                    local -a prowler_cmd=(prowler gcp --organization-id "$TRIMMED_ORGANIZATION_ID")
+                    add_common_prowler_options
+
+                    printf 'Executing:'
+                    printf ' %q' "${prowler_cmd[@]}"
+                    echo
+                    "${prowler_cmd[@]}"
+                    PROWLER_EXIT_CODE=$?
+
+                    if [ $PROWLER_EXIT_CODE -ne 0 ]; then
+                      echo "ERROR: Prowler organization scan failed with exit code $PROWLER_EXIT_CODE"
+                      return $PROWLER_EXIT_CODE
+                    fi
+
+                    echo "Prowler organization scan completed successfully"
+                  }
+
+                  if [[ ${#PROJECT_ARRAY[@]} -eq 0 ]]; then
+                    if [[ -z "$TRIMMED_ORGANIZATION_ID" ]]; then
+                      echo "ERROR: No GCP projects or organization ID were provided"
+                      exit 1
+                    fi
+
+                    run_prowler_for_organization
+                    exit $?
+                  fi
+
+                  # Run scans for all projects (with concurrency control)
+                  pids=()
+                  failed_projects=0
+                  for project_id in "${PROJECT_ARRAY[@]}"; do
+                    project_id=$(echo "$project_id" | xargs)  # Trim whitespace
+
+                    # Wait if we've reached max concurrent scans
+                    while [ ${#pids[@]} -ge $MAX_CONCURRENT_SCANS ]; do
+                      for i in "${!pids[@]}"; do
+                        if ! kill -0 "${pids[$i]}" 2>/dev/null; then
+                          wait "${pids[$i]}"
+                          if [ $? -ne 0 ]; then
+                            failed_projects=$((failed_projects + 1))
+                          fi
+                          unset "pids[$i]"
+                        fi
+                      done
+                      pids=("${pids[@]}")  # Reindex array
+                      sleep 2
+                    done
+
+                    # Start scan for this project in background
+                    run_prowler_for_project "$project_id" &
+                    pids+=($!)
+
+                    echo "Started scan for project $project_id (PID: $!)"
+                  done
+
+                  # Wait for all background processes to complete
+                  echo "Waiting for all scans to complete..."
+                  for pid in "${pids[@]}"; do
+                    wait $pid
+                    if [ $? -ne 0 ]; then
+                      failed_projects=$((failed_projects + 1))
+                    fi
+                  done
+
+                  if [ $failed_projects -gt 0 ]; then
+                    echo "ERROR: $failed_projects project scan(s) failed. Check logs above for specific error details."
+                    exit 1
+                  fi
+
+                  echo "All GCP project scans completed"
+
+            post_build:
+              commands:
+                # Always scrub the service account key, regardless of build outcome
+                - rm -f /tmp/gcp-service-account.json
+                - echo "CODEBUILD_BUILD_SUCCEEDING status is $CODEBUILD_BUILD_SUCCEEDING"
+                - |
+                  if [ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]; then
+                    echo "ERROR: The previous build stage failed. Exiting without uploading results to S3."
+                    exit 1
+                  fi
+
+                  echo "=== Uploading results to S3 ==="
+
+                  # Check if output directory exists
+                  if [ ! -d "output" ]; then
+                    echo "WARNING: No output directory found, creating one..."
+                    mkdir -p output
+                    find . -maxdepth 1 \( -name "*.csv" -o -name "*.json" -o -name "*.html" -o -name "*.sarif" \) -exec cp {} output/ \; 2>/dev/null || true
+                  fi
+
+                  cd output
+
+                  # Create a summary of findings
+                  echo "=== GCP Prowler Scan Summary ===" > scan-summary.txt
+                  echo "Scan Date: $(date)" >> scan-summary.txt
+                  echo "Prowler Version: ${PROWLER_INSTALLED_VERSION:-unknown}" >> scan-summary.txt
+                  if [[ -n "$GCP_PROJECT_IDS" && "$GCP_PROJECT_IDS" != "null" ]]; then
+                    echo "Projects Scanned: $GCP_PROJECT_IDS" >> scan-summary.txt
+                  else
+                    echo "Projects Scanned: Discovered from organization" >> scan-summary.txt
+                  fi
+                  if [[ -n "$GCP_ORGANIZATION_ID" && "$GCP_ORGANIZATION_ID" != "null" ]]; then
+                    echo "Organization ID: $GCP_ORGANIZATION_ID" >> scan-summary.txt
+                  fi
+                  echo "" >> scan-summary.txt
+
+                  # List generated files
+                  echo "Generated Files:" >> scan-summary.txt
+                  find . -type f -exec ls -lh {} \; >> scan-summary.txt
+
+                  # Delete GCP SDK Files before uploading
+                  echo "Deleting the GCP SDK Files"
+                  rm -rf google-cloud-sdk/ 2>/dev/null || true
+                  ls -larth
+
+                  # Upload all results to S3 with error handling
+                  echo "Uploading all scan results to S3..."
+                  upload_failed=false
+                  if ! aws s3 cp . s3://$S3_BUCKET/output/ --recursive; then
+                    echo "ERROR: Failed to upload results to S3"
+                    upload_failed=true
+                  fi
+
+                  if [[ $upload_failed == true ]]; then
+                    echo "ERROR: S3 upload failed. Check logs above for details."
+                    exit 1
+                  fi
+
+                  echo "All reports uploaded successfully!"
+                  echo "Results available in S3 bucket: $S3_BUCKET"
+
+                  # Display summary
+                  cat scan-summary.txt
+
+  # CloudWatch Logs Group for CodeBuild
+  GCPProwlerCodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${GCPProwlerCodeBuildProject}"
+      RetentionInDays: 90
+
+  # KMS Key for SNS notification encryption
+  GCPProwlerNotificationKMSKey:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting GCP Prowler SNS notifications in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowEventBridgeToPublishNotifications
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  GCPProwlerNotificationKMSKeyAlias:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-gcp-sns-notifications-key"
+      TargetKeyId: !Ref GCPProwlerNotificationKMSKey
+
+  # SNS Topic for notifications (optional)
+  GCPProwlerNotificationTopic:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "GCPProwlerNotifications-${AWS::StackName}"
+      KmsMasterKeyId: !Ref GCPProwlerNotificationKMSKey
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  # SNS Topic Policy
+  GCPProwlerSNSTopicPolicy:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: GCPProwlerSNSPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridge
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action:
+              - "sns:Publish"
+            Resource: !Ref GCPProwlerNotificationTopic
+      Topics:
+        - !Ref GCPProwlerNotificationTopic
+
+  # EventBridge Rule for CodeBuild state changes
+  GCPProwlerEventBridgeRule:
+    Condition: HasEmailNotification
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "GCPProwlerBuildStateChange-${AWS::StackName}"
+      Description: "Capture CodeBuild state changes for GCP Prowler scans"
+      EventPattern:
+        source:
+          - "aws.codebuild"
+        detail-type:
+          - "CodeBuild Build State Change"
+        detail:
+          build-status:
+            - "SUCCEEDED"
+            - "FAILED"
+            - "STOPPED"
+          project-name:
+            - !Ref GCPProwlerCodeBuildProject
+      State: ENABLED
+      Targets:
+        - Id: SNSTarget
+          Arn: !Ref GCPProwlerNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              build-status: "$.detail.build-status"
+              project-name: "$.detail.project-name"
+              build-id: "$.detail.build-id"
+            InputTemplate: !Sub |
+              "GCP Prowler Security Assessment Completed
+
+              Status: <build-status>
+              Project: <project-name>
+              Build ID: <build-id>
+
+              Check your S3 bucket for detailed results: gcp-prowler-findings-${AWS::AccountId}-${AWS::Region}
+
+              Scan Details:
+              - Projects: ${GCPProjectIds} (empty means organization discovery)
+              - Organization ID: ${GCPOrganizationId}"
+
+  # Custom Resource to trigger initial scan
+  TriggerInitialScan:
+    Type: Custom::TriggerScan
+    DependsOn:
+      - GCPProwlerLambdaLogGroup
+      - GCPProwlerCodeBuildLogGroup
+    Properties:
+      ServiceToken: !GetAtt GCPProwlerLambdaFunction.Arn
+      TriggerUpdate: !Ref AWS::StackId
+
+Outputs:
+  S3BucketName:
+    Description: "S3 bucket containing GCP Prowler scan results"
+    Value: !Ref GCPProwlerFindingsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3Bucket"
+
+  CodeBuildProjectName:
+    Description: "CodeBuild project name for GCP Prowler scanning"
+    Value: !Ref GCPProwlerCodeBuildProject
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeBuildProject"
+
+  LambdaFunctionName:
+    Description: "Lambda function to trigger GCP Prowler scans"
+    Value: !Ref GCPProwlerLambdaFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunction"
+
+  SecretsManagerArn:
+    Description: "Secrets Manager ARN containing the GCP service account key"
+    Value: !Ref GCPCredentialsSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-GCPCredentials"
+
+  ScanConfiguration:
+    Description: "Summary of GCP scan configuration"
+    Value: !Sub |
+      GCP Prowler Scan Configuration:
+      - Projects: ${GCPProjectIds} (empty means organization discovery)
+      - Organization ID: ${GCPOrganizationId}
+      - Concurrent Scans: ${ConcurrentProjectScans}
+
+  UsageInstructions:
+    Description: "Instructions for using the GCP Prowler scanner"
+    Value: !Sub |
+      GCP Prowler Scanner Usage:
+
+      1. Manual Trigger:
+         aws lambda invoke --function-name ${GCPProwlerLambdaFunction} response.json
+
+      2. View Results:
+         aws s3 ls s3://${GCPProwlerFindingsBucket}/output/
+
+      3. Download Results:
+         aws s3 sync s3://${GCPProwlerFindingsBucket}/output/ ./local-results/
+
+      4. Monitor Progress:
+         aws codebuild batch-get-builds --ids <build-id>
+
+      5. View Logs:
+         aws logs describe-log-streams --log-group-name /aws/codebuild/${GCPProwlerCodeBuildProject}
+
+  SecurityConsiderations:
+    Description: "Important security considerations"
+    Value: |
+      Security Best Practices:
+
+      ✓ GCP credentials are stored securely in AWS Secrets Manager
+      ✓ Service Account follows principle of least privilege
+      ✓ S3 bucket has encryption and access controls
+      ✓ CloudWatch logs for audit trail
+      ✓ IAM roles use condition-based access controls
+
+      Required GCP Service Account Permissions:
+      - Security Reviewer (roles/iam.securityReviewer)
+      - Viewer (roles/viewer)
+      - Cloud Asset Viewer (roles/cloudasset.viewer)
+      - Security Center Admin Viewer (roles/securitycenter.adminViewer)
+
+      For organization-level scanning, also add:
+      - Cloud Asset Viewer (roles/cloudasset.viewer) at the organization node
+      - Organization Viewer (roles/resourcemanager.organizationViewer)
+      - Folder Viewer (roles/resourcemanager.folderViewer)
+
+  PrerequisiteSteps:
+    Description: "Steps to prepare GCP environment for scanning"
+    Value: |
+      GCP Prerequisites:
+
+      1. Create Service Account:
+         gcloud iam service-accounts create prowler-scanner \
+           --description="Service account for Prowler security scanning" \
+           --display-name="Prowler Scanner"
+
+      2. Grant Required Permissions (per project):
+         gcloud projects add-iam-policy-binding PROJECT_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/iam.securityReviewer"
+
+         gcloud projects add-iam-policy-binding PROJECT_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/viewer"
+
+         gcloud projects add-iam-policy-binding PROJECT_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/cloudasset.viewer"
+
+         # If Security Command Center is enabled:
+         gcloud projects add-iam-policy-binding PROJECT_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/securitycenter.adminViewer"
+
+      3. Create and Download Service Account Key:
+         gcloud iam service-accounts keys create prowler-key.json \
+           --iam-account=prowler-scanner@PROJECT_ID.iam.gserviceaccount.com
+
+      4. Enable Required APIs (per project):
+         gcloud services enable cloudresourcemanager.googleapis.com
+         gcloud services enable iam.googleapis.com
+         gcloud services enable compute.googleapis.com
+         gcloud services enable storage.googleapis.com
+         gcloud services enable cloudasset.googleapis.com
+         gcloud services enable securitycenter.googleapis.com
+
+      5. For Organization Scanning (optional):
+         gcloud organizations add-iam-policy-binding ORGANIZATION_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/cloudasset.viewer"
+
+         gcloud organizations add-iam-policy-binding ORGANIZATION_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/resourcemanager.organizationViewer"
+
+         gcloud organizations add-iam-policy-binding ORGANIZATION_ID \
+           --member="serviceAccount:prowler-scanner@PROJECT_ID.iam.gserviceaccount.com" \
+           --role="roles/resourcemanager.folderViewer"

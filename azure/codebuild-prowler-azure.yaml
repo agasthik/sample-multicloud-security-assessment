@@ -1,0 +1,853 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Azure Security Assessment Solution using Prowler CSPM CLI running in AWS CodeBuild
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Azure Configuration
+        Parameters:
+          - AzureClientId
+          - AzureClientSecret
+          - AzureTenantId
+          - AzureSubscriptionIds
+      - Label:
+          default: Scan Configuration
+        Parameters:
+          - ProwlerScanType
+          - ConcurrentSubscriptionScans
+          - CodeBuildTimeout
+          - ProwlerOptions
+          - ProwlerVersion
+      - Label:
+          default: Notification Options
+        Parameters:
+          - EmailAddress
+
+    ParameterLabels:
+      AzureClientId:
+        default: Azure Service Principal Client ID
+      AzureClientSecret:
+        default: Azure Service Principal Client Secret
+      AzureTenantId:
+        default: Azure Tenant ID
+      AzureSubscriptionIds:
+        default: Azure Subscription IDs
+      ProwlerScanType:
+        default: Prowler scan type
+      ConcurrentSubscriptionScans:
+        default: Concurrent Subscription Scans
+      CodeBuildTimeout:
+        default: CodeBuild Timeout
+      ProwlerOptions:
+        default: Prowler options
+      ProwlerVersion:
+        default: Prowler Version
+      EmailAddress:
+        default: Email Address for Notifications
+
+Parameters:
+  AzureClientId:
+    Description: "Azure Service Principal Client ID for authentication"
+    Type: String
+    AllowedPattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    ConstraintDescription: "Must be a valid Azure Client ID (GUID format)"
+
+  AzureClientSecret:
+    Description: "Azure Service Principal Client Secret for authentication"
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    ConstraintDescription: "Azure Client Secret cannot be empty"
+
+  AzureTenantId:
+    Description: "Azure Active Directory Tenant ID"
+    Type: String
+    AllowedPattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+    ConstraintDescription: "Must be a valid Azure Tenant ID (GUID format)"
+
+  AzureSubscriptionIds:
+    Description: "Comma-separated list of Azure Subscription IDs to scan"
+    Type: String
+    MinLength: 1
+    ConstraintDescription: "At least one Azure Subscription ID must be provided"
+
+  ConcurrentSubscriptionScans:
+    Description: "Number of Azure subscriptions to scan concurrently"
+    Type: String
+    AllowedValues:
+      - "One"
+      - "Three"
+      - "Five"
+    Default: "Three"
+
+  CodeBuildTimeout:
+    Description: "Timeout for the CodeBuild job in minutes"
+    Type: Number
+    MinValue: 30
+    MaxValue: 2160
+    Default: 480
+
+  ProwlerScanType:
+    Description: "Specify which type of scan to perform. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Type: String
+    AllowedValues:
+      - "Intermediate"
+      - "Full"
+    Default: "Intermediate"
+
+  ProwlerOptions:
+    Description: "Output and reporting options for Prowler. The provider (azure) and scan severity (from ProwlerScanType) are added automatically."
+    Type: String
+    Default: "--ignore-exit-code-3 --output-formats csv json-ocsf html"
+
+  ProwlerVersion:
+    Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
+    Type: String
+    Default: "5.35.0"
+    AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
+    ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
+
+  EmailAddress:
+    Description: "Email address to receive scan completion notifications (optional)"
+    Type: String
+    Default: ""
+
+Conditions:
+  HasEmailNotification: !Not [!Equals [!Ref EmailAddress, ""]]
+
+Mappings:
+  ProwlerScanParameters:
+    Intermediate:
+      ProwlerOptions: --severity critical high
+    Full:
+      ProwlerOptions: ""
+  ConcurrentScanMap:
+    One:
+      MaxConcurrent: 1
+      CodeBuildComputeType: BUILD_GENERAL1_SMALL
+    Three:
+      MaxConcurrent: 3
+      CodeBuildComputeType: BUILD_GENERAL1_MEDIUM
+    Five:
+      MaxConcurrent: 5
+      CodeBuildComputeType: BUILD_GENERAL1_LARGE
+
+Resources:
+  # KMS Key for Secrets Manager encryption
+  SecretsManagerKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting Secrets Manager secrets in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+  SecretsManagerKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-secrets-key"
+      TargetKeyId: !Ref SecretsManagerKMSKey
+
+  # Azure Client Secret
+  AzureCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "${AWS::StackName}-azure-credentials"
+      Description: "Azure Service Principal client secret for Prowler Azure scanning"
+      KmsKeyId: !Ref SecretsManagerKMSKey
+      SecretString: !Ref AzureClientSecret
+
+  # S3 Bucket for Prowler Azure findings
+  AzureProwlerFindingsBucket:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: Access logging is intentionally not enabled. This bucket is provisioned for a one-time security assessment to validate cloud security posture and is retained only for the duration of the assessment.
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "azure-prowler-findings-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  # S3 Bucket Policy
+  AzureProwlerFindingsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AzureProwlerFindingsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSSLRequestsOnly
+            Principal: "*"
+            Action: "s3:*"
+            Effect: Deny
+            Resource:
+              - !Sub "${AzureProwlerFindingsBucket.Arn}"
+              - !Sub "${AzureProwlerFindingsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCodeBuildAccess
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt AzureProwlerCodeBuildRole.Arn
+            Action:
+              - "s3:PutObject"
+              - "s3:ListBucket"
+            Resource:
+              - !Sub "${AzureProwlerFindingsBucket.Arn}"
+              - !Sub "${AzureProwlerFindingsBucket.Arn}/*"
+
+  # IAM Role for CodeBuild
+  AzureProwlerCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/service-role/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action: "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+                "aws:SourceArn": !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:project/AzureProwler-${AWS::StackName}"
+      Policies:
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Effect: Allow
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/AzureProwler*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                Effect: Allow
+                Resource:
+                  - !Sub "${AzureProwlerFindingsBucket.Arn}"
+                  - !Sub "${AzureProwlerFindingsBucket.Arn}/*"
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "secretsmanager:GetSecretValue"
+                Effect: Allow
+                Resource: !Ref AzureCredentialsSecret
+              - Action:
+                  - "kms:Decrypt"
+                Effect: Allow
+                Resource: !GetAtt SecretsManagerKMSKey.Arn
+
+  # Lambda Role for triggering CodeBuild
+  AzureProwlerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuilds"
+                Resource: !GetAtt AzureProwlerCodeBuildProject.Arn
+
+  # CloudWatch Logs Group for Lambda
+  AzureProwlerLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AzureProwlerLambdaFunction}"
+      RetentionInDays: 90
+
+  # Lambda Function to start CodeBuild
+  AzureProwlerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "AzureProwlerTrigger-${AWS::StackName}"
+      Handler: index.lambda_handler
+      Role: !GetAtt AzureProwlerLambdaRole.Arn
+      Runtime: python3.12
+      Timeout: 300
+      Environment:
+        Variables:
+          CODEBUILD_PROJECT_NAME: !Ref AzureProwlerCodeBuildProject
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from botocore.exceptions import ClientError
+          import cfnresponse
+
+          def lambda_handler(event, context):
+              request_type = event.get('RequestType', 'Direct')
+              logical_resource_id = event.get('LogicalResourceId', 'DirectInvocation')
+              print(f"Received {request_type} request for {logical_resource_id}")
+
+              # Handle CloudFormation custom resource
+              if 'RequestType' in event:
+                  return handle_cloudformation_event(event, context)
+
+              # Handle direct invocation
+              return start_prowler_scan(event, context)
+
+          def handle_cloudformation_event(event, context):
+              try:
+                  if event['RequestType'] == 'Create':
+                      result = start_prowler_scan(event, context)
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, result)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Exception Occurred: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+          def start_prowler_scan(event, context):
+              codebuild = boto3.client('codebuild')
+              project_name = os.environ['CODEBUILD_PROJECT_NAME']
+
+              try:
+                  print(f"Starting CodeBuild project: {project_name}")
+                  response = codebuild.start_build(projectName=project_name)
+
+                  build_id = response['build']['id']
+                  build_status = response['build']['buildStatus']
+
+                  result = {
+                      'BuildId': build_id,
+                      'BuildStatus': build_status,
+                      'Message': f'Azure Prowler scan started successfully. Build ID: {build_id}'
+                  }
+
+                  print(f"Build started: {json.dumps(result)}")
+                  return result
+
+              except ClientError as e:
+                  error_msg = f"Failed to start CodeBuild project: {str(e)}"
+                  print(error_msg)
+                  raise Exception(error_msg)
+
+  # CodeBuild Project for Azure Prowler scanning
+  AzureProwlerCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "AzureProwler-${AWS::StackName}"
+      Description: "Prowler security assessment for Azure environments"
+      ServiceRole: !GetAtt AzureProwlerCodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType:
+          !FindInMap [
+            ConcurrentScanMap,
+            !Ref ConcurrentSubscriptionScans,
+            CodeBuildComputeType,
+          ]
+        Image: "aws/codebuild/amazonlinux-x86_64-standard:6.0"
+        HostKernel: "LINUX_KERNEL_6"
+        EnvironmentVariables:
+          - Name: S3_BUCKET
+            Value: !Ref AzureProwlerFindingsBucket
+            Type: PLAINTEXT
+          - Name: PROWLER_VERSION
+            Value: !Ref ProwlerVersion
+            Type: PLAINTEXT
+          - Name: AZURE_CLIENT_SECRET_ARN
+            Value: !Ref AzureCredentialsSecret
+            Type: PLAINTEXT
+          - Name: AZURE_CLIENT_ID
+            Value: !Ref AzureClientId
+            Type: PLAINTEXT
+          - Name: AZURE_TENANT_ID
+            Value: !Ref AzureTenantId
+            Type: PLAINTEXT
+          - Name: AZURE_SUBSCRIPTION_IDS
+            Value: !Ref AzureSubscriptionIds
+            Type: PLAINTEXT
+          - Name: PROWLER_OPTIONS
+            Value: !Ref ProwlerOptions
+            Type: PLAINTEXT
+          - Name: PROWLER_SCAN_OPTIONS
+            Value:
+              !FindInMap [
+                ProwlerScanParameters,
+                !Ref ProwlerScanType,
+                "ProwlerOptions",
+              ]
+            Type: PLAINTEXT
+          - Name: MAX_CONCURRENT_SCANS
+            Value:
+              !FindInMap [
+                ConcurrentScanMap,
+                !Ref ConcurrentSubscriptionScans,
+                MaxConcurrent,
+              ]
+            Type: PLAINTEXT
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+            Type: PLAINTEXT
+      TimeoutInMinutes: !Ref CodeBuildTimeout
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - echo "=== Installing Dependencies ==="
+                - export PYTHONWARNINGS="ignore::DeprecationWarning"
+                - pip3 install --upgrade pip --quiet
+                - |
+                  if [ "$PROWLER_VERSION" = "latest" ]; then
+                    pip3 install prowler --quiet --disable-pip-version-check --root-user-action ignore
+                  else
+                    pip3 install "prowler==${PROWLER_VERSION}" --quiet --disable-pip-version-check --root-user-action ignore
+                  fi
+                - pip3 install azure-cli --quiet --root-user-action ignore
+                - dnf install -y jq -q
+                - echo " Dependencies installed"
+                - export PROWLER_INSTALLED_VERSION="$(prowler --version)"
+                - echo "$PROWLER_INSTALLED_VERSION"
+                - az --version
+
+            pre_build:
+              commands:
+                - echo "=== Retrieving Azure Client Secret ==="
+                - |
+                  if ! AZURE_CLIENT_SECRET=$(aws secretsmanager get-secret-value --secret-id "$AZURE_CLIENT_SECRET_ARN" --query SecretString --output text 2>/dev/null); then
+                    echo "ERROR: Failed to retrieve Azure client secret from Secrets Manager"
+                    echo "Secret ARN: $AZURE_CLIENT_SECRET_ARN"
+                    exit 1
+                  fi
+                  export AZURE_CLIENT_SECRET
+                - |
+                  # Validate required credentials
+                  if [[ -z "$AZURE_CLIENT_ID" || "$AZURE_CLIENT_ID" == "null" ]]; then
+                    echo "ERROR: Azure Client ID is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$AZURE_CLIENT_SECRET" || "$AZURE_CLIENT_SECRET" == "null" ]]; then
+                    echo "ERROR: Azure Client Secret is missing or invalid"
+                    exit 1
+                  fi
+                  if [[ -z "$AZURE_TENANT_ID" || "$AZURE_TENANT_ID" == "null" ]]; then
+                    echo "ERROR: Azure Tenant ID is missing or invalid"
+                    exit 1
+                  fi
+                  echo "Credentials validated successfully"
+                - echo "=== Authenticating with Azure ==="
+                - |
+                  if ! az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"; then
+                    echo "ERROR: Azure authentication failed"
+                    echo "Please verify your Client ID, Client Secret, and Tenant ID"
+                    exit 1
+                  fi
+                  echo "Azure authentication successful"
+                - |
+                  AZURE_ACCESSIBLE_SUBSCRIPTION_COUNT=$(az account list --query 'length(@)' --output tsv)
+                  echo "Accessible Azure subscriptions: $AZURE_ACCESSIBLE_SUBSCRIPTION_COUNT"
+
+            build:
+              commands:
+                - echo "=== Starting Azure Prowler Scans ==="
+                - |
+                  # Validate subscription IDs
+                  if [[ -z "$AZURE_SUBSCRIPTION_IDS" ]]; then
+                    echo "ERROR: No subscription IDs provided"
+                    exit 1
+                  fi
+                - |
+                  run_prowler_for_subscription() {
+                    local subscription_id=$1
+                    local scan_label=$2
+
+                    echo "=== Scanning Azure subscription #$scan_label ==="
+
+                    if ! az account show --subscription "$subscription_id" >/dev/null 2>&1; then
+                      echo "ERROR: Failed to access Azure subscription #$scan_label"
+                      return 1
+                    fi
+
+                    local -a prowler_cmd=(prowler azure --subscription-ids "$subscription_id" -b --az-cli-auth)
+
+                    # Add scan severity options (from ProwlerScanType)
+                    if [[ -n "$PROWLER_SCAN_OPTIONS" && "$PROWLER_SCAN_OPTIONS" != "null" ]]; then
+                      local -a scan_options=()
+                      read -r -a scan_options <<< "$PROWLER_SCAN_OPTIONS"
+                      prowler_cmd+=("${scan_options[@]}")
+                    fi
+
+                    # Add output/reporting options
+                    if [[ -n "$PROWLER_OPTIONS" && "$PROWLER_OPTIONS" != "null" ]]; then
+                      local -a prowler_options=()
+                      read -r -a prowler_options <<< "$PROWLER_OPTIONS"
+                      prowler_cmd+=("${prowler_options[@]}")
+                    fi
+
+                    printf 'Executing:'
+                    printf ' %q' "${prowler_cmd[@]}"
+                    echo
+                    echo "Executing Prowler for Azure subscription #$scan_label"
+                    echo "Prowler execution started at $(date)"
+
+                    "${prowler_cmd[@]}"
+                    local prowler_exit_code=$?
+                    if [ $prowler_exit_code -ne 0 ]; then
+                      echo "ERROR: Prowler scan failed for Azure subscription #$scan_label with exit code $prowler_exit_code"
+                      return $prowler_exit_code
+                    fi
+
+                    echo "Prowler scan completed successfully for Azure subscription #$scan_label"
+                  }
+
+                  IFS=',' read -ra SUBSCRIPTION_ARRAY <<< "${AZURE_SUBSCRIPTION_IDS}"
+                  echo "Processing ${#SUBSCRIPTION_ARRAY[@]} Azure subscription(s)"
+
+                  failed_subscriptions=()
+                  pids=()
+                  pid_subscriptions=()
+                  total_scans=0
+
+                  wait_for_oldest_scan() {
+                    wait "${pids[0]}"
+                    scan_status=$?
+                    if [ $scan_status -ne 0 ]; then
+                      failed_subscriptions+=("${pid_subscriptions[0]}")
+                    fi
+                    pids=("${pids[@]:1}")
+                    pid_subscriptions=("${pid_subscriptions[@]:1}")
+                  }
+
+                  for subscription_id in "${SUBSCRIPTION_ARRAY[@]}"; do
+                    subscription_id=$(echo "$subscription_id" | xargs)
+
+                    if [[ -z "$subscription_id" ]]; then
+                      echo "WARNING: Skipping empty subscription ID"
+                      continue
+                    fi
+
+                    if [ ${#pids[@]} -ge "$MAX_CONCURRENT_SCANS" ]; then
+                      wait_for_oldest_scan
+                    fi
+
+                    scan_label=$((total_scans + 1))
+                    run_prowler_for_subscription "$subscription_id" "$scan_label" &
+                    pids+=($!)
+                    pid_subscriptions+=($scan_label)
+                    total_scans=$((total_scans + 1))
+                  done
+
+                  while [ ${#pids[@]} -gt 0 ]; do
+                    wait_for_oldest_scan
+                  done
+
+                  failed_scans=${#failed_subscriptions[@]}
+                  successful_scans=$((total_scans - failed_scans))
+
+                  echo "=== SCAN SUMMARY ==="
+                  echo "Total subscriptions: $total_scans"
+                  echo "Successful scans: $successful_scans"
+                  echo "Failed scans: $failed_scans"
+
+                  if [ $failed_scans -gt 0 ]; then
+                    echo "ERROR: Prowler scans failed for subscriptions: ${failed_subscriptions[*]}"
+                    exit 1
+                  fi
+
+                  echo "Scan phase completed"
+
+            post_build:
+              commands:
+                - echo "CODEBUILD_BUILD_SUCCEEDING status is $CODEBUILD_BUILD_SUCCEEDING"
+                - |
+                  if [ $CODEBUILD_BUILD_SUCCEEDING -eq 0 ]; then
+                    echo "ERROR: The previous build stage failed. Exiting without uploading results to S3."
+                    exit 1
+                  fi
+
+                  echo "=== Uploading Results to S3 ==="
+                  echo "Current directory contents:"
+                  ls -la . || echo "Failed to list directory"
+
+                  # Organize output files
+                  if [ ! -d "output" ]; then
+                    echo "WARNING: No output directory found, creating one..."
+                    mkdir -p output
+                    # Look for files in current directory
+                    find . -maxdepth 1 \( -name "*.csv" -o -name "*.json" -o -name "*.html" -o -name "*.sarif" \) -exec cp {} output/ \; 2>/dev/null || true
+                  fi
+
+                  cd output
+
+                  # Create scan summary
+                  echo "=== Azure Prowler Scan Summary ===" > scan-summary.txt
+                  echo "Scan Date: $(date)" >> scan-summary.txt
+                  echo "Prowler Version: ${PROWLER_INSTALLED_VERSION:-unknown}" >> scan-summary.txt
+                  IFS=',' read -ra SUMMARY_SUBSCRIPTION_ARRAY <<< "${AZURE_SUBSCRIPTION_IDS}"
+                  echo "Subscriptions Scanned: ${#SUMMARY_SUBSCRIPTION_ARRAY[@]}" >> scan-summary.txt
+                  echo "" >> scan-summary.txt
+
+                  # List generated files
+                  echo "Generated Files:" >> scan-summary.txt
+                  find . -type f -exec ls -lh {} \; >> scan-summary.txt
+
+                  # Upload to S3 with error handling
+                  echo "Uploading all results to S3..."
+                  upload_failed=false
+                  if ! aws s3 cp . s3://$S3_BUCKET/output/ --recursive; then
+                    echo "ERROR: Failed to upload results to S3"
+                    upload_failed=true
+                  fi
+
+                  if [[ $upload_failed == true ]]; then
+                    echo "ERROR: S3 upload failed. Check logs above for details."
+                    exit 1
+                  fi
+
+                  echo "All reports uploaded successfully!"
+                  echo "Results available in S3 bucket: $S3_BUCKET"
+                  cat scan-summary.txt
+
+  # CloudWatch Logs Group for CodeBuild
+  AzureProwlerCodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${AzureProwlerCodeBuildProject}"
+      RetentionInDays: 90
+
+  # KMS Key for SNS notification encryption
+  AzureProwlerNotificationKMSKey:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "KMS key for encrypting Azure Prowler SNS notifications in ${AWS::StackName}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnableRootAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: AllowEventBridgeToPublishNotifications
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  AzureProwlerNotificationKMSKeyAlias:
+    Condition: HasEmailNotification
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${AWS::StackName}-azure-sns-notifications-key"
+      TargetKeyId: !Ref AzureProwlerNotificationKMSKey
+
+  # SNS Topic for notifications (optional)
+  AzureProwlerNotificationTopic:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "AzureProwlerNotifications-${AWS::StackName}"
+      KmsMasterKeyId: !Ref AzureProwlerNotificationKMSKey
+      Subscription:
+        - Endpoint: !Ref EmailAddress
+          Protocol: email
+
+  # SNS Topic Policy
+  AzureProwlerSNSTopicPolicy:
+    Condition: HasEmailNotification
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      PolicyDocument:
+        Id: AzureProwlerSNSPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridge
+            Effect: Allow
+            Principal:
+              Service: "events.amazonaws.com"
+            Action:
+              - "sns:Publish"
+            Resource: !Ref AzureProwlerNotificationTopic
+      Topics:
+        - !Ref AzureProwlerNotificationTopic
+
+  # EventBridge Rule for CodeBuild state changes
+  AzureProwlerEventBridgeRule:
+    Condition: HasEmailNotification
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "AzureProwlerBuildStateChange-${AWS::StackName}"
+      Description: "Capture CodeBuild state changes for Azure Prowler scans"
+      EventPattern:
+        source:
+          - "aws.codebuild"
+        detail-type:
+          - "CodeBuild Build State Change"
+        detail:
+          build-status:
+            - "SUCCEEDED"
+            - "FAILED"
+            - "STOPPED"
+          project-name:
+            - !Ref AzureProwlerCodeBuildProject
+      State: ENABLED
+      Targets:
+        - Id: SNSTarget
+          Arn: !Ref AzureProwlerNotificationTopic
+          InputTransformer:
+            InputPathsMap:
+              build-status: "$.detail.build-status"
+              project-name: "$.detail.project-name"
+              build-id: "$.detail.build-id"
+            InputTemplate: !Sub |
+              "Azure Prowler Security Assessment Completed
+
+              Status: <build-status>
+              Project: <project-name>
+              Build ID: <build-id>
+
+              Check your S3 bucket for detailed results: ${AzureProwlerFindingsBucket}
+
+              Scan Details:
+              - Subscriptions: ${AzureSubscriptionIds}"
+
+  # Custom Resource to trigger initial scan
+  TriggerInitialScan:
+    Type: Custom::TriggerScan
+    DependsOn:
+      - AzureProwlerLambdaLogGroup
+      - AzureProwlerCodeBuildLogGroup
+    Properties:
+      ServiceToken: !GetAtt AzureProwlerLambdaFunction.Arn
+      TriggerUpdate: !Ref AWS::StackId
+
+Outputs:
+  S3BucketName:
+    Description: "S3 bucket containing Azure Prowler scan results"
+    Value: !Ref AzureProwlerFindingsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-S3Bucket"
+
+  CodeBuildProjectName:
+    Description: "CodeBuild project name for Azure Prowler scanning"
+    Value: !Ref AzureProwlerCodeBuildProject
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeBuildProject"
+
+  LambdaFunctionName:
+    Description: "Lambda function to trigger Azure Prowler scans"
+    Value: !Ref AzureProwlerLambdaFunction
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunction"
+
+  SecretsManagerArn:
+    Description: "Secrets Manager ARN containing the Azure client secret"
+    Value: !Ref AzureCredentialsSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-AzureCredentials"
+
+  ScanConfiguration:
+    Description: "Summary of Azure scan configuration"
+    Value: !Sub |
+      Azure Prowler Scan Configuration:
+      - Tenant ID: ${AzureTenantId}
+      - Subscriptions: ${AzureSubscriptionIds}
+      - Concurrent Scans: ${ConcurrentSubscriptionScans}
+
+  UsageInstructions:
+    Description: "Instructions for using the Azure Prowler scanner"
+    Value: !Sub |
+      Azure Prowler Scanner Usage:
+
+      1. Manual Trigger:
+         aws lambda invoke --function-name ${AzureProwlerLambdaFunction} response.json
+
+      2. View Results:
+         aws s3 ls s3://${AzureProwlerFindingsBucket}/output/
+
+      3. Download Results:
+         aws s3 sync s3://${AzureProwlerFindingsBucket}/output/ ./local-results/
+
+      4. Monitor Progress:
+         aws codebuild batch-get-builds --ids <build-id>
+
+      5. View Logs:
+         aws logs describe-log-streams --log-group-name /aws/codebuild/${AzureProwlerCodeBuildProject}

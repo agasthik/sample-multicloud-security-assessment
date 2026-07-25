@@ -1,0 +1,47 @@
+aws:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "aws/**"
+
+azure:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "azure/**"
+
+gcp:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "gcp/**"
+
+oci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "oci/**"
+
+cloudformation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.yaml"
+          - "**/*.yml"
+
+checks:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/checks/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "img/**"
+
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/ash-*.yml"
+          - "SECURITY.md"
