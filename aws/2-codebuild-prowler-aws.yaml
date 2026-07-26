@@ -65,7 +65,7 @@ Parameters:
       - "false"
     Default: "false"
   ProwlerScanType:
-    Description: "Specify which type of scan to perform. A basic scan runs 13 checks. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Description: "Specify which type of scan to perform. A Basic scan runs 13 checks. An Intermediate scan reports only critical and high severity findings. Only a Full scan runs every available check and produces compliance standard evaluations."
     Type: String
     AllowedValues:
       - "Basic"
@@ -207,6 +207,8 @@ Resources:
         Statement:
           - Action:
               - account:Get*
+              - amplify:ListApps
+              - amplify:ListBranches              
               - appstream:Describe*
               - appstream:List*
               - backup:List*
@@ -218,6 +220,9 @@ Resources:
               - codebuild:BatchGet*
               - codebuild:ListReportGroups
               - cognito-idp:GetUserPoolMfaConfig
+              - datapipeline:DescribePipelines
+              - datapipeline:GetPipelineDefinition
+              - datapipeline:ListPipelines
               - dlm:Get*
               - drs:Describe*
               - ds:Get*
@@ -239,7 +244,11 @@ Resources:
               - logs:FilterLogEvents
               - macie2:GetMacieSession
               - macie2:GetAutomatedDiscoveryConfiguration
+              - rolesanywhere:ListTagsForResource
+              - rolesanywhere:ListTrustAnchors
               - s3:GetAccountPublicAccessBlock
+              - s3:GetObjectAcl
+              - s3:ListBucket
               - shield:DescribeProtection
               - shield:GetSubscriptionState
               - securityhub:GetFindings
