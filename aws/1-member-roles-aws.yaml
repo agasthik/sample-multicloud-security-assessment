@@ -51,6 +51,8 @@ Resources:
         Statement:
           - Action:
               - account:Get*
+              - amplify:ListApps
+              - amplify:ListBranches
               - appstream:Describe*
               - appstream:List*
               - backup:List*
@@ -62,6 +64,9 @@ Resources:
               - codebuild:BatchGet*
               - codebuild:ListReportGroups
               - cognito-idp:GetUserPoolMfaConfig
+              - datapipeline:DescribePipelines
+              - datapipeline:GetPipelineDefinition
+              - datapipeline:ListPipelines
               - dlm:Get*
               - drs:Describe*
               - ds:Get*
@@ -83,7 +88,11 @@ Resources:
               - logs:FilterLogEvents
               - macie2:GetMacieSession
               - macie2:GetAutomatedDiscoveryConfiguration
+              - rolesanywhere:ListTagsForResource
+              - rolesanywhere:ListTrustAnchors
               - s3:GetAccountPublicAccessBlock
+              - s3:GetObjectAcl
+              - s3:ListBucket
               - shield:DescribeProtection
               - shield:GetSubscriptionState
               - securityhub:GetFindings

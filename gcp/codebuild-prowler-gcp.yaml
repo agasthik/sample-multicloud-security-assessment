@@ -78,7 +78,7 @@ Parameters:
     Default: 480
 
   ProwlerScanType:
-    Description: "Specify which type of scan to perform. An Intermediate scan runs all critical and high severity checks. A Full scan runs all available checks."
+    Description: "Specify which type of scan to perform. An Intermediate scan reports only critical and high severity findings. Only a Full scan runs every available check and produces compliance standard evaluations."
     Type: String
     AllowedValues:
       - "Intermediate"
