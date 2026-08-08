@@ -1,0 +1,63 @@
+name: Update Prowler Version
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-prowler-version
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest published Prowler version
+        id: prowler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest_version="$(
+            curl --fail --silent --show-error --location \
+              -H "Accept: application/json" \
+              https://pypi.org/pypi/prowler/json |
+              python -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
+          )"
+
+          if [[ ! "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "PyPI returned an unsupported Prowler version: $latest_version" >&2
+            exit 1
+          fi
+
+          echo "Latest published Prowler version: $latest_version"
+          printf "version=%s\n" "$latest_version" >> "$GITHUB_OUTPUT"
+
+      - name: Update CloudFormation template defaults
+        run: python .github/scripts/update-prowler-version.py "${{ steps.prowler.outputs.version }}"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: automation/update-prowler-version
+          delete-branch: true
+          add-paths: |
+            aws/2-codebuild-prowler-aws.yaml
+            azure/codebuild-prowler-azure.yaml
+            gcp/codebuild-prowler-gcp.yaml
+            oci/codebuild-prowler-oci.yaml
+          commit-message: "chore: update Prowler to ${{ steps.prowler.outputs.version }}"
+          title: "chore: update Prowler to ${{ steps.prowler.outputs.version }}"
+          body: |
+            Updates the default `ProwlerVersion` in the AWS, Azure, GCP, and OCI CloudFormation templates to the latest published version from PyPI.
+
+            Source: https://pypi.org/project/prowler/
