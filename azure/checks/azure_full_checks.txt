@@ -1,4 +1,4 @@
-Prowler 5.35.0 (You are running the latest version, yay!)
+Prowler 5.39.1 (You are running the latest version, yay!)
 [aisearch_service_not_publicly_accessible] AI Search service has public network access disabled - aisearch [high]
 [aks_cluster_auto_upgrade_enabled] AKS cluster has automatic upgrade enabled - aks [medium]
 [aks_cluster_azure_monitor_enabled] AKS cluster has Azure Monitor metrics enabled - aks [medium]

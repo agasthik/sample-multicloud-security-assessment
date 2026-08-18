@@ -1,4 +1,4 @@
-Prowler 5.35.0 (You are running the latest version, yay!)
+Prowler 5.39.1 (You are running the latest version, yay!)
 [aisearch_service_not_publicly_accessible] AI Search service has public network access disabled - aisearch [high]
 [aks_cluster_defender_enabled] AKS cluster has Microsoft Defender security profile enabled - aks [high]
 [aks_cluster_local_accounts_disabled] AKS cluster has local accounts disabled - aks [high]

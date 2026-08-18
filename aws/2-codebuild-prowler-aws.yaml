@@ -54,7 +54,7 @@ Parameters:
   ProwlerVersion:
     Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
     Type: String
-    Default: "5.38.0"
+    Default: "5.39.1"
     AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
     ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
   SecurityHubIntegration:
@@ -77,14 +77,14 @@ Parameters:
     Type: String
     Default: ProwlerMemberRole
   MultiAccountScan:
-    Description: "Set this to true to scan active AWS Organizations member accounts from a delegated administrator account. The configured ProwlerRole must exist in every scanned account."
+    Description: "Set to true to scan active AWS Organizations member accounts from a delegated administrator account (deploy this scanner in a dedicated security or tooling account, not the management account). Before scanning, the ProwlerRole (ProwlerMemberRole) must already exist in every target account. Deploy it organization-wide first by creating a service-managed StackSet from the 1-member-roles-aws.yaml template, targeting the OUs you want to scan."
     Type: String
     AllowedValues:
       - "true"
       - "false"
     Default: "false"
   ScanManagementAccount:
-    Description: "For automatic multi-account discovery, include the Organizations management account. The member role must be deployed directly in that account because service-managed StackSets cannot deploy there."
+    Description: "Whether to scan the AWS Organizations management account. Applies to multi-account scans only. Service-managed StackSets cannot deploy into the management account, so automatic discovery skips it. To include the management account, first deploy the 1-member-roles-aws.yaml template as a standalone stack in that account, set its ProwlerAccountID parameter to this scanner's account ID, then set this parameter to true.This parameter is ignored for single-account scans, which always scan the account where the stack is deployed."
     Type: String
     AllowedValues:
       - "true"
@@ -398,7 +398,6 @@ Resources:
         ZipFile: |
           import os
           import boto3
-          from botocore.exceptions import ClientError
           import cfnresponse
 
           def startBuild(event, context):
@@ -409,7 +408,10 @@ Resources:
               response = cb.start_build(projectName=event['ResourceProperties']['ProjectName'])
               responseData['buildID'] = response['build']['id']
               cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
-            except ClientError as e:
+            except Exception as e:
+              # Catch every error (not just ClientError) so CloudFormation always
+              # receives a response; otherwise the custom resource waits for the
+              # full timeout (~1h) before the stack fails.
               print("Failed to start build")
               print(e)
               cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
