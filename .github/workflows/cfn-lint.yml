@@ -25,13 +25,31 @@ jobs:
           python-version: "3.12"
 
       - name: Install cfn-lint
-        run: pip install cfn-lint
+        # Pin for reproducible runs; bump deliberately when adopting a new release.
+        run: pip install "cfn-lint==1.55.1"
 
       - name: Lint CloudFormation templates
         run: |
-          cfn-lint \
-            aws/1-member-roles-aws.yaml \
-            aws/2-codebuild-prowler-aws.yaml \
-            azure/codebuild-prowler-azure.yaml \
-            gcp/codebuild-prowler-gcp.yaml \
-            oci/codebuild-prowler-oci.yaml
+          # Discover every CloudFormation template automatically so new templates
+          # are covered without editing this workflow. A template is any tracked
+          # *.yaml/*.yml with a top-level AWSTemplateFormatVersion or Resources
+          # block; GitHub Actions/config YAML under .github/ is excluded.
+          templates=()
+          while IFS= read -r f; do
+            templates+=("$f")
+          done < <(
+            git ls-files '*.yaml' '*.yml' \
+              | grep -vE '^\.github/' \
+              | while read -r candidate; do
+                  if grep -qE '^(AWSTemplateFormatVersion|Resources):' "$candidate"; then
+                    echo "$candidate"
+                  fi
+                done
+          )
+          if [ ${#templates[@]} -eq 0 ]; then
+            echo "ERROR: No CloudFormation templates found to lint (discovery may be broken)."
+            exit 1
+          fi
+          echo "Linting ${#templates[@]} template(s):"
+          printf ' - %s\n' "${templates[@]}"
+          cfn-lint "${templates[@]}"

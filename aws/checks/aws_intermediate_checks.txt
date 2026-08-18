@@ -1,4 +1,4 @@
-Prowler 5.35.0 (You are running the latest version, yay!)
+Prowler 5.39.1 (You are running the latest version, yay!)
 [acm_certificates_expiration_check] ACM certificate expires in more than the configured threshold of days - acm [high]
 [acm_certificates_with_secure_key_algorithms] ACM certificate uses a secure key algorithm - acm [high]
 [amplify_app_no_secrets_in_environment] Amplify app has no sensitive credentials in environment variables or build settings - amplify [high]
@@ -12,6 +12,8 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [awslambda_function_not_publicly_accessible] Lambda function resource-based policy does not allow public access - awslambda [critical]
 [awslambda_function_url_public] Lambda function URL is not publicly accessible - awslambda [high]
 [awslambda_function_using_cross_account_layers] Lambda function does not use cross-account layers - awslambda [high]
+[awslambda_layer_no_secrets_in_content] Lambda layer content contains no hardcoded secrets - awslambda [high]
+[batch_job_definition_no_secrets] AWS Batch job definitions have no secrets in environment variables or command parameters - batch [high]
 [bedrock_agent_guardrail_enabled] Amazon Bedrock agent uses a guardrail to protect agent sessions - bedrock [high]
 [bedrock_agent_role_least_privilege] Amazon Bedrock agent execution role follows least privilege - bedrock [high]
 [bedrock_api_key_no_administrative_privileges] Amazon Bedrock API key does not have administrative privileges, privilege escalation paths, or full Bedrock service access - bedrock [high]
@@ -38,6 +40,7 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [codebuild_project_source_repo_url_no_sensitive_credentials] CodeBuild project source repository URLs do not contain sensitive credentials - codebuild [critical]
 [codebuild_project_uses_allowed_github_organizations] CodeBuild project using GitHub uses an allowed GitHub organization - codebuild [high]
 [codebuild_project_webhook_filters_use_anchored_patterns] CodeBuild project webhook filters use anchored regex patterns - codebuild [high]
+[codecommit_repository_no_secrets] CodeCommit repository has no secrets in its default branch - codecommit [high]
 [config_delegated_admin_and_org_aggregator_all_regions] AWS Config has a delegated administrator and an organization aggregator covering all AWS regions - config [high]
 [datapipeline_pipeline_no_secrets_in_definition] Data Pipeline definition has no sensitive credentials - datapipeline [high]
 [datasync_task_logging_enabled] DataSync task has CloudWatch Logs log group configured for logging - datasync [high]
@@ -45,6 +48,8 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [dms_instance_no_public_access] DMS replication instance is not publicly exposed to the Internet - dms [critical]
 [documentdb_cluster_public_snapshot] DocumentDB manual cluster snapshot is not shared publicly - documentdb [critical]
 [ec2_ami_public] EC2 AMI owned by the account is not public - ec2 [critical]
+[ec2_confidential_workload_host_imdsv2_not_enforced] Confidential-workload host enforces IMDSv2 - ec2 [high]
+[ec2_confidential_workload_host_unrestricted_ingress] Confidential-workload host does not expose non-standard ports to the internet - ec2 [high]
 [ec2_ebs_default_encryption] EBS default encryption is enabled - ec2 [high]
 [ec2_ebs_public_snapshot] EBS snapshot is not public - ec2 [critical]
 [ec2_ebs_snapshot_account_block_public_access] All EBS snapshots have public access blocked - ec2 [high]
@@ -119,6 +124,7 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [eventbridge_bus_exposed] AWS EventBridge event bus policy does not allow public access - eventbridge [high]
 [eventbridge_schema_registry_cross_account_access] AWS EventBridge schema registry does not allow cross-account access - eventbridge [high]
 [glacier_vaults_policy_public_access] S3 Glacier vault has no policy or its policy does not allow access to everyone - glacier [critical]
+[glue_catalog_connection_no_secrets] Glue Data Catalog connection has no secrets in connection properties - glue [high]
 [glue_data_catalogs_connection_passwords_encryption_enabled] Glue data catalog connection password is encrypted with a KMS key - glue [high]
 [glue_data_catalogs_not_publicly_accessible] Glue Data Catalog is not publicly accessible via its resource policy - glue [high]
 [glue_database_connections_ssl_enabled] Glue connection has SSL enabled - glue [high]
@@ -163,6 +169,9 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [kinesis_stream_encrypted_at_rest] Kinesis stream is encrypted at rest with KMS - kinesis [high]
 [kms_cmk_not_deleted_unintentionally] AWS KMS customer managed key is not scheduled for deletion - kms [critical]
 [kms_cmk_rotation_enabled] KMS customer-managed symmetric CMK has automatic rotation enabled - kms [high]
+[kms_key_enclave_attestation_bypassable_path] KMS enclave key has no authorization path that bypasses attestation - kms [high]
+[kms_key_enclave_attestation_not_enforced] KMS enclave key requires kms:RecipientAttestation conditions on sensitive actions - kms [high]
+[kms_key_enclave_debug_attestation_detected] No Nitro Enclave debug-mode attestation observed against this KMS key - kms [high]
 [kms_key_not_publicly_accessible] Cloud KMS key does not grant access to allUsers or allAuthenticatedUsers - kms [critical]
 [lightsail_database_public] Lightsail database public access disabled - lightsail [high]
 [lightsail_instance_public] Lightsail instance has no publicly accessible ports - lightsail [high]
@@ -213,6 +222,7 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [s3_multi_region_access_point_public_access_block] S3 Multi-Region Access Point has all Block Public Access settings enabled - s3 [high]
 [sagemaker_models_network_isolation_enabled] Amazon SageMaker model has network isolation enabled - sagemaker [high]
 [sagemaker_notebook_instance_encryption_enabled] SageMaker notebook instance is encrypted with a KMS key - sagemaker [high]
+[sagemaker_notebook_instance_no_secrets] SageMaker notebook instance lifecycle configuration contains no hardcoded secrets - sagemaker [high]
 [sagemaker_notebook_instance_vpc_settings_configured] Amazon SageMaker notebook instance has VPC settings configured - sagemaker [high]
 [sagemaker_notebook_instance_without_direct_internet_access_configured] Amazon SageMaker notebook instance has direct internet access disabled - sagemaker [high]
 [sagemaker_training_jobs_network_isolation_enabled] Amazon SageMaker training job has network isolation enabled - sagemaker [high]
@@ -242,5 +252,5 @@ Prowler 5.35.0 (You are running the latest version, yay!)
 [workspaces_volume_encryption_enabled] Amazon WorkSpaces workspace root and user volumes are encrypted - workspaces [high]
 [workspaces_vpc_2private_1public_subnets_nat] Workspace is in a private subnet and its VPC has at least 1 public subnet, 2 private subnets, and a NAT Gateway - workspaces [high]
 
-There are 242 available checks.
+There are 252 available checks.
 
