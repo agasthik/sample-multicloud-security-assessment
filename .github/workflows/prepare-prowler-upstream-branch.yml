@@ -18,7 +18,7 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == 'agasthik/sample-multicloud-security-assessment'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -26,12 +26,12 @@ jobs:
       UPSTREAM_REPOSITORY: aws-samples/sample-multicloud-security-assessment
     steps:
       - name: Checkout fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
