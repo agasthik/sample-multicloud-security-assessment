@@ -1,4 +1,4 @@
-Prowler 5.39.1 (You are running the latest version, yay!)
+Prowler 5.43.0 (You are running the latest version, yay!)
 [apikeys_api_restricted_with_gemini_api] API key is restricted to specific Google APIs when the Gemini (Generative Language) API is enabled - apikeys [high]
 [apikeys_api_restrictions_configured] API key is restricted to specific Google APIs - apikeys [high]
 [bigquery_dataset_cmk_encryption] BigQuery dataset is encrypted with Customer-Managed Keys (CMKs) - bigquery [high]
@@ -26,8 +26,9 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [iam_account_access_approval_enabled] Project has Access Approval enabled - iam [high]
 [iam_cloud_asset_inventory_enabled] Project has Cloud Asset Inventory API enabled - iam [high]
 [iam_sa_no_administrative_privileges] Service account has no administrative privileges - iam [high]
+[iam_workload_identity_pool_provider_attribute_condition] Workload Identity Federation providers trusting a multi-tenant issuer enforce an attribute condition - iam [high]
 [kms_key_not_publicly_accessible] Cloud KMS key has no public IAM access - kms [high]
 [secretmanager_secret_not_publicly_accessible] Secret Manager secret is not publicly accessible - secretmanager [critical]
 
-There are 29 available checks.
+There are 30 available checks.
 
