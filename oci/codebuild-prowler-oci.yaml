@@ -122,7 +122,7 @@ Parameters:
   ProwlerVersion:
     Description: "Prowler PyPI version to install. The default is the tested release for this template; use 'latest' only for exploratory testing. Check for the latest Prowler versions at https://github.com/prowler-cloud/prowler/releases"
     Type: String
-    Default: "5.38.0"
+    Default: "5.39.1"
     AllowedPattern: ^(latest|[0-9]+\.[0-9]+\.[0-9]+)$
     ConstraintDescription: "Must be 'latest' or a semantic version such as 5.35.0"
 
@@ -539,14 +539,18 @@ Resources:
                   echo "Credentials validated successfully"
                 - echo "=== Configuring OCI CLI ==="
                 - |
-                  # Create OCI config directory
+                  # Create OCI config directory (owner-only)
                   mkdir -p ~/.oci
+                  chmod 700 ~/.oci
 
-                  # Write the private key file
+                  # Pre-create the sensitive files with 600 perms BEFORE writing
+                  # secrets into them, so they are never briefly world-readable
+                  # (redirecting with '>' truncates content but keeps the mode).
+                  install -m 600 /dev/null ~/.oci/oci_api_key.pem
                   printf '%s\n' "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
-                  chmod 600 ~/.oci/oci_api_key.pem
 
                   # Write the OCI config file
+                  install -m 600 /dev/null ~/.oci/config
                   cat > ~/.oci/config <<OCIEOF
                   [DEFAULT]
                   user=$OCI_USER_OCID
@@ -555,8 +559,6 @@ Resources:
                   region=$OCI_REGION
                   key_file=~/.oci/oci_api_key.pem
                   OCIEOF
-
-                  chmod 600 ~/.oci/config
 
                   echo "OCI configuration written"
 
@@ -592,6 +594,12 @@ Resources:
 
                     if [[ -n "$compartment_id" ]]; then
                       prowler_cmd+=(--compartment-id "$compartment_id")
+                      # Write each compartment's reports to a dedicated subdirectory.
+                      # Prowler's default output filename is keyed on the tenancy, not
+                      # the compartment, so concurrent compartment scans would otherwise
+                      # write to the same files in output/ and silently overwrite each
+                      # other, losing all but the last writer's findings.
+                      prowler_cmd+=(--output-directory "output/$compartment_id")
                     fi
 
                     # Add scan severity options (from ProwlerScanType)

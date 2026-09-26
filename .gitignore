@@ -7,6 +7,14 @@ terraform/
 
 gcp/*.json
 
+# Credentials / private keys — never commit
+# (e.g. the oci_api_key.pem generated during OCI setup)
+*.pem
+*.key
+*.p12
+*.pfx
+oci_api_key*
+
 all/
 
 TODO.txt

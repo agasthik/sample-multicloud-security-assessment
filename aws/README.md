@@ -288,7 +288,7 @@ ConcurrentAccountScans: "Three" # Three, Six, Twelve, FortyEight
 CodeBuildTimeout: 300 # Minutes (5-2160)
 MultiAccountListOverride: "" # Specific account list
 ProwlerOptions: "--ignore-exit-code-3 --output-formats csv json-ocsf html" # Output/reporting options; provider and scan severity are added automatically
-ProwlerVersion: "5.35.0" # Tested default baked into the template; omit to use it. Must be "latest" or a semantic version (e.g. 5.35.0). Use "latest" only for exploratory testing
+# ProwlerVersion: "<x.y.z>" # Optional; omit to use the tested default pinned in the template. Set to a semantic version or "latest" (use "latest" only for exploratory testing)
 SecurityHubIntegration: "false" # Import AWS Prowler findings into AWS Security Hub
 ProwlerRole: "ProwlerMemberRole" # Cross-account role name
 ```
@@ -380,13 +380,7 @@ The scanner template automatically starts an initial scan when deployed, using a
 
 ### Manual Scan Triggers
 
-To re-run a scan after the initial deployment, start the CodeBuild project directly. The project name is fixed as `ProwlerCodeBuild`:
-
-```bash
-aws codebuild start-build --project-name ProwlerCodeBuild
-```
-
-You can also read the project name from the stack outputs:
+To re-run a scan after the initial deployment, start the CodeBuild project directly. The project name follows the pattern `AWSProwler-<stack-name>` (for a stack named `aws-prowler-scanner`, the project is `AWSProwler-aws-prowler-scanner`). Read the exact name from the stack outputs so you do not have to hardcode it:
 
 ```bash
 CODEBUILD_PROJECT=$(aws cloudformation describe-stacks \
@@ -405,6 +399,12 @@ Create an EventBridge rule that starts the CodeBuild project on a schedule. This
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=$(aws configure get region)
 
+# Read the CodeBuild project name from the stack outputs
+CODEBUILD_PROJECT=$(aws cloudformation describe-stacks \
+  --stack-name aws-prowler-scanner \
+  --query 'Stacks[0].Outputs[?OutputKey==`ProwlerCodeBuildProject`].OutputValue' \
+  --output text)
+
 # Role that lets EventBridge start the build
 ROLE_ARN=$(aws iam create-role \
   --role-name aws-prowler-scheduled-scan \
@@ -414,7 +414,7 @@ ROLE_ARN=$(aws iam create-role \
 aws iam put-role-policy \
   --role-name aws-prowler-scheduled-scan \
   --policy-name StartProwlerBuild \
-  --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"codebuild:StartBuild\",\"Resource\":\"arn:aws:codebuild:${REGION}:${ACCOUNT_ID}:project/ProwlerCodeBuild\"}]}"
+  --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"codebuild:StartBuild\",\"Resource\":\"arn:aws:codebuild:${REGION}:${ACCOUNT_ID}:project/${CODEBUILD_PROJECT}\"}]}"
 
 aws events put-rule \
   --name aws-prowler-daily-scan \
@@ -423,7 +423,7 @@ aws events put-rule \
 
 aws events put-targets \
   --rule aws-prowler-daily-scan \
-  --targets "Id=1,Arn=arn:aws:codebuild:${REGION}:${ACCOUNT_ID}:project/ProwlerCodeBuild,RoleArn=${ROLE_ARN}"
+  --targets "Id=1,Arn=arn:aws:codebuild:${REGION}:${ACCOUNT_ID}:project/${CODEBUILD_PROJECT},RoleArn=${ROLE_ARN}"
 ```
 
 ## Understanding Scan Results
@@ -732,8 +732,8 @@ aws organizations list-accounts
 **Solutions**:
 
 ```bash
-# Check CodeBuild logs for Prowler output
-aws logs tail /aws/codebuild/ProwlerCodeBuild --since 1h
+# Check CodeBuild logs for Prowler output (project/log group are AWSProwler-<stack-name>)
+aws logs tail /aws/codebuild/AWSProwler-aws-prowler-scanner --since 1h
 
 # Verify Prowler options are correct
 --parameter-overrides ProwlerOptions="--ignore-exit-code-3 --output-formats csv json-ocsf html -v"
@@ -765,11 +765,11 @@ aws cloudformation describe-stack-events --stack-name aws-prowler-scanner
 #### Monitor CodeBuild
 
 ```bash
-# List recent builds
-aws codebuild list-builds-for-project --project-name ProwlerCodeBuild
+# List recent builds (project name is AWSProwler-<stack-name>)
+aws codebuild list-builds-for-project --project-name AWSProwler-aws-prowler-scanner
 
 # Stream build logs
-aws logs tail /aws/codebuild/ProwlerCodeBuild --follow
+aws logs tail /aws/codebuild/AWSProwler-aws-prowler-scanner --follow
 ```
 
 #### Verify Permissions

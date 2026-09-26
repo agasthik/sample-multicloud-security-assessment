@@ -1,4 +1,4 @@
-Prowler 5.35.0 (You are running the latest version, yay!)
+Prowler 5.39.1 (You are running the latest version, yay!)
 [apikeys_api_restricted_with_gemini_api] API key is restricted to specific Google APIs when the Gemini (Generative Language) API is enabled - apikeys [high]
 [apikeys_api_restrictions_configured] API key is restricted to specific Google APIs - apikeys [high]
 [apikeys_key_exists] Project has no active API keys - apikeys [medium]
