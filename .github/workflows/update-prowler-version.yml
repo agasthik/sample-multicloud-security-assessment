@@ -1,0 +1,171 @@
+name: Update Prowler Version
+
+on:
+  schedule:
+    # Weekly, away from the top of the hour when scheduled workflows are busiest.
+    - cron: "17 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-prowler-version
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.repository == 'agasthik/sample-multicloud-security-assessment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Find latest stable Prowler release
+        id: prowler
+        run: |
+          version="$(python3 scripts/update_prowler_version.py --print-latest)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Latest stable Prowler release: ${version}"
+
+      - name: Update CloudFormation templates
+        run: |
+          python3 scripts/update_prowler_version.py \
+            --version "${{ steps.prowler.outputs.version }}"
+
+      - name: Detect managed file changes
+        id: changes
+        env:
+          PROWLER_VERSION: ${{ steps.prowler.outputs.version }}
+        run: |
+          changed=false
+          if ! git diff --quiet -- \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml; then
+            changed=true
+          fi
+
+          while IFS= read -r inventory; do
+            if ! head -n 1 "${inventory}" | grep -qE \
+              "^Prowler ${PROWLER_VERSION}( |$)"; then
+              echo "${inventory} was not generated with Prowler ${PROWLER_VERSION}."
+              changed=true
+            fi
+          done < <(git ls-files '*/checks/*.txt')
+
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+
+      - name: Run updater tests
+        run: python3 -m unittest discover -s tests
+
+      - name: Install candidate Prowler release and cfn-lint
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          python3 -m pip install \
+            "prowler==${{ steps.prowler.outputs.version }}" \
+            "cfn-lint==1.55.1"
+
+      - name: Smoke-test Prowler providers
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          prowler --version
+          for provider in aws azure gcp oraclecloud; do
+            echo "Checking Prowler provider: ${provider}"
+            prowler "${provider}" --help > /dev/null
+          done
+
+      - name: Regenerate Prowler check inventories
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          for script in \
+            aws/checks/list-aws-checks.sh \
+            azure/checks/list-azure-checks.sh \
+            gcp/checks/list-gcp-checks.sh \
+            oci/checks/list-oci-checks.sh; do
+            echo "Running ${script}"
+            bash "${script}"
+          done
+
+      - name: Verify only managed files changed
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          unexpected_files="$(
+            git diff --name-only | grep -vE \
+              '^(aws/2-codebuild-prowler-aws\.yaml|azure/codebuild-prowler-azure\.yaml|gcp/codebuild-prowler-gcp\.yaml|oci/codebuild-prowler-oci\.yaml|(aws|azure|gcp|oci)/checks/[^/]+\.txt)$' \
+              || true
+          )"
+          if [ -n "${unexpected_files}" ]; then
+            echo "ERROR: Unexpected files were changed:"
+            echo "${unexpected_files}"
+            exit 1
+          fi
+
+      - name: Lint CloudFormation templates
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          cfn-lint \
+            aws/1-member-roles-aws.yaml \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml
+
+      - name: Create pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: agasthik/sample-multicloud-security-assessment
+          PROWLER_VERSION: ${{ steps.prowler.outputs.version }}
+        run: |
+          branch="automation/prowler-${PROWLER_VERSION}"
+          existing_pr="$(
+            gh pr list \
+              --repo "${GH_REPO}" \
+              --head "${branch}" \
+              --state all \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -n "${existing_pr}" ]; then
+            echo "Pull request #${existing_pr} already tracks Prowler ${PROWLER_VERSION}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+          git add \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml \
+            aws/checks/*.txt \
+            azure/checks/*.txt \
+            gcp/checks/*.txt \
+            oci/checks/*.txt
+          git commit -m "chore: update Prowler to ${PROWLER_VERSION}"
+          git push origin "HEAD:${branch}"
+
+          gh pr create \
+            --repo "${GH_REPO}" \
+            --base main \
+            --head "${branch}" \
+            --title "chore: update Prowler to ${PROWLER_VERSION}" \
+            --body "Automated update to the latest stable Prowler release on PyPI.
+
+          Release information:
+          - PyPI: https://pypi.org/project/prowler/${PROWLER_VERSION}/
+          - Changelog: https://github.com/prowler-cloud/prowler/releases
+
+          The updater tests, provider CLI smoke tests, check inventory regeneration, and CloudFormation linting passed before this pull request was opened."
