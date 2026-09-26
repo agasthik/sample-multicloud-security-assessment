@@ -1,0 +1,147 @@
+name: Prepare Prowler Upstream Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable Prowler version already merged into the fork (X.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prepare-prowler-upstream-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'agasthik/sample-multicloud-security-assessment'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PROWLER_VERSION: ${{ inputs.version }}
+      UPSTREAM_REPOSITORY: aws-samples/sample-multicloud-security-assessment
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify version is merged into fork main
+        run: |
+          python3 scripts/update_prowler_version.py \
+            --version "${PROWLER_VERSION}"
+
+          if ! git diff --quiet -- \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml; then
+            echo "ERROR: Prowler ${PROWLER_VERSION} is not present in every template on fork main."
+            echo "Merge the fork-only update PR before preparing the upstream branch."
+            exit 1
+          fi
+
+          while IFS= read -r inventory; do
+            if ! head -n 1 "${inventory}" | grep -qE \
+              "^Prowler ${PROWLER_VERSION}( |$)"; then
+              echo "ERROR: ${inventory} was not generated with Prowler ${PROWLER_VERSION}."
+              echo "Merge the fork-only update PR before preparing the upstream branch."
+              exit 1
+            fi
+          done < <(git ls-files '*/checks/*.txt')
+
+      - name: Create clean branch from upstream main
+        run: |
+          branch="feature/prowler-${PROWLER_VERSION}"
+          updater="${RUNNER_TEMP}/update_prowler_version.py"
+          cp scripts/update_prowler_version.py "${updater}"
+
+          if git ls-remote --exit-code --heads origin "refs/heads/${branch}" > /dev/null; then
+            echo "ERROR: ${branch} already exists in the fork."
+            echo "Use the existing branch or delete it before running this workflow again."
+            exit 1
+          fi
+
+          git remote add upstream \
+            "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream \
+            main:refs/remotes/upstream/main
+          git switch --detach upstream/main
+          git switch -c "${branch}"
+
+          python3 "${updater}" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --version "${PROWLER_VERSION}"
+
+          python3 -m pip install \
+            "prowler==${PROWLER_VERSION}" \
+            "cfn-lint==1.55.1"
+
+          for script in \
+            aws/checks/list-aws-checks.sh \
+            azure/checks/list-azure-checks.sh \
+            gcp/checks/list-gcp-checks.sh \
+            oci/checks/list-oci-checks.sh; do
+            echo "Running ${script}"
+            bash "${script}"
+          done
+
+          changed_files="$(git diff --name-only)"
+          if [ -z "${changed_files}" ]; then
+            echo "Upstream main already uses Prowler ${PROWLER_VERSION}; no branch is needed."
+            exit 0
+          fi
+
+          unexpected_files="$(
+            echo "${changed_files}" | grep -vE \
+              '^(aws/2-codebuild-prowler-aws\.yaml|azure/codebuild-prowler-azure\.yaml|gcp/codebuild-prowler-gcp\.yaml|oci/codebuild-prowler-oci\.yaml|(aws|azure|gcp|oci)/checks/[^/]+\.txt)$' \
+              || true
+          )"
+          if [ -n "${unexpected_files}" ]; then
+            echo "ERROR: Unexpected files would be included:"
+            echo "${unexpected_files}"
+            exit 1
+          fi
+
+          cfn-lint \
+            aws/1-member-roles-aws.yaml \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            aws/2-codebuild-prowler-aws.yaml \
+            azure/codebuild-prowler-azure.yaml \
+            gcp/codebuild-prowler-gcp.yaml \
+            oci/codebuild-prowler-oci.yaml \
+            aws/checks/*.txt \
+            azure/checks/*.txt \
+            gcp/checks/*.txt \
+            oci/checks/*.txt
+          git commit -m "chore: update Prowler to ${PROWLER_VERSION}"
+          git push origin "HEAD:${branch}"
+
+          {
+            echo "## Upstream branch prepared"
+            echo
+            echo "Branch: \`${branch}\`"
+            echo
+            echo "Open a pull request manually with:"
+            echo
+            echo "- Base repository: \`${UPSTREAM_REPOSITORY}\`"
+            echo "- Base branch: \`main\`"
+            echo "- Head repository: \`agasthik/sample-multicloud-security-assessment\`"
+            echo "- Compare branch: \`${branch}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

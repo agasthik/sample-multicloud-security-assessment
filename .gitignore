@@ -1,6 +1,8 @@
 #Temp Files
 .DS_Store
 scratchpad.txt
+__pycache__/
+*.py[cod]
 
 reporting/
 terraform/
