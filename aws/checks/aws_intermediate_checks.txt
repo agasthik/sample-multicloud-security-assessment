@@ -1,4 +1,4 @@
-Prowler 5.39.1 (You are running the latest version, yay!)
+Prowler 5.43.0 (You are running the latest version, yay!)
 [acm_certificates_expiration_check] ACM certificate expires in more than the configured threshold of days - acm [high]
 [acm_certificates_with_secure_key_algorithms] ACM certificate uses a secure key algorithm - acm [high]
 [amplify_app_no_secrets_in_environment] Amplify app has no sensitive credentials in environment variables or build settings - amplify [high]
@@ -16,11 +16,15 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [batch_job_definition_no_secrets] AWS Batch job definitions have no secrets in environment variables or command parameters - batch [high]
 [bedrock_agent_guardrail_enabled] Amazon Bedrock agent uses a guardrail to protect agent sessions - bedrock [high]
 [bedrock_agent_role_least_privilege] Amazon Bedrock agent execution role follows least privilege - bedrock [high]
+[bedrock_agent_role_not_shared_across_agents] Bedrock Agent has a dedicated execution role - bedrock [high]
 [bedrock_api_key_no_administrative_privileges] Amazon Bedrock API key does not have administrative privileges, privilege escalation paths, or full Bedrock service access - bedrock [high]
 [bedrock_api_key_no_long_term_credentials] Amazon Bedrock long-term API key has expired - bedrock [high]
+[bedrock_custom_model_encrypted_with_cmk] Bedrock custom model is encrypted with a customer-managed KMS key - bedrock [critical]
 [bedrock_full_access_policy_attached] IAM role does not have AmazonBedrockFullAccess managed policy attached - bedrock [high]
+[bedrock_guardrail_contextual_grounding_filter_enabled] Bedrock guardrail blocks ungrounded and irrelevant model responses - bedrock [high]
 [bedrock_guardrail_prompt_attack_filter_enabled] Amazon Bedrock guardrail has prompt attack filter strength set to HIGH - bedrock [high]
 [bedrock_guardrail_sensitive_information_filter_enabled] Amazon Bedrock guardrail blocks or masks sensitive information - bedrock [high]
+[bedrock_knowledge_base_encrypted_with_cmk] Bedrock knowledge base data source is encrypted with a customer-managed KMS key - bedrock [high]
 [bedrock_model_invocation_logs_encryption_enabled] Amazon Bedrock model invocation logs are encrypted in the S3 bucket and KMS-encrypted in the CloudWatch log group - bedrock [high]
 [cloudformation_stack_cdktoolkit_bootstrap_version] CDKToolkit CloudFormation stack has Bootstrap version 21 or higher - cloudformation [high]
 [cloudformation_stack_outputs_find_secrets] CloudFormation stack outputs do not contain secrets - cloudformation [critical]
@@ -102,6 +106,7 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [ec2_securitygroup_default_restrict_traffic] VPC default security group has no inbound or outbound rules - ec2 [high]
 [ec2_transitgateway_auto_accept_vpc_attachments] Amazon EC2 Transit Gateway does not automatically accept shared VPC attachments - ec2 [high]
 [ecr_repositories_not_publicly_accessible] ECR repository is not publicly accessible - ecr [critical]
+[ecr_repository_image_no_secrets] ECR repository image contains no hardcoded secrets - ecr [high]
 [ecs_service_no_assign_public_ip] ECS service does not have automatic public IP assignment - ecs [high]
 [ecs_task_definitions_containers_readonly_access] ECS task definition has all containers with read-only root filesystems - ecs [high]
 [ecs_task_definitions_host_namespace_not_shared] ECS task definition does not share the host's process namespace with its containers - ecs [high]
@@ -119,6 +124,7 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [elasticache_redis_cluster_backup_enabled] ElastiCache Redis cache cluster has automated snapshot backups enabled with retention of at least 7 days - elasticache [high]
 [elasticbeanstalk_environment_cloudwatch_logging_enabled] Elastic Beanstalk environment streams logs to CloudWatch Logs - elasticbeanstalk [high]
 [elasticbeanstalk_environment_managed_updates_enabled] Elastic Beanstalk environment has managed platform updates enabled - elasticbeanstalk [high]
+[elasticbeanstalk_environment_no_secrets_in_configuration] Elastic Beanstalk environment configuration has no hardcoded secrets - elasticbeanstalk [high]
 [emr_cluster_account_public_block_enabled] EMR account has Block Public Access enabled - emr [high]
 [eventbridge_bus_cross_account_access] AWS EventBridge event bus does not allow cross-account access - eventbridge [high]
 [eventbridge_bus_exposed] AWS EventBridge event bus policy does not allow public access - eventbridge [high]
@@ -130,6 +136,7 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [glue_database_connections_ssl_enabled] Glue connection has SSL enabled - glue [high]
 [glue_etl_jobs_amazon_s3_encryption_enabled] Glue job has S3 encryption enabled - glue [high]
 [glue_etl_jobs_no_secrets_in_arguments] Glue ETL job has no secrets in default arguments - glue [critical]
+[guardduty_ai_protection_enabled] GuardDuty detector has AI Protection enabled - guardduty [high]
 [guardduty_delegated_admin_enabled_all_regions] GuardDuty has delegated admin configured and is enabled in all regions with organization auto-enable - guardduty [high]
 [guardduty_ec2_malware_protection_enabled] GuardDuty detector has Malware Protection for EC2 enabled - guardduty [high]
 [guardduty_eks_audit_log_enabled] GuardDuty detector has EKS Audit Log Monitoring enabled - guardduty [high]
@@ -137,6 +144,7 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [guardduty_lambda_protection_enabled] GuardDuty detector has Lambda Protection enabled - guardduty [high]
 [guardduty_no_high_severity_findings] GuardDuty detector has no high severity findings - guardduty [high]
 [guardduty_rds_protection_enabled] GuardDuty detector has RDS Protection enabled - guardduty [high]
+[guardduty_runtime_monitoring_enabled] GuardDuty detector has Runtime Monitoring enabled - guardduty [high]
 [guardduty_s3_protection_enabled] GuardDuty detector has S3 Protection enabled - guardduty [high]
 [iam_administrator_access_with_mfa] IAM group members granted AdministratorAccess have MFA enabled - iam [high]
 [iam_avoid_root_usage] AWS account root user has not been used in the last day - iam [high]
@@ -150,6 +158,8 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [iam_no_expired_server_certificates_stored] IAM server certificate is not expired - iam [high]
 [iam_no_root_access_key] Root account has no active access keys - iam [critical]
 [iam_policy_allows_privilege_escalation] Customer managed IAM policy does not allow actions that can lead to privilege escalation - iam [high]
+[iam_policy_no_agentcore_workload_access_token_wildcard] Custom IAM policy scopes Bedrock AgentCore workload access token retrieval to workload identity ARNs - iam [high]
+[iam_policy_passrole_to_bedrock_agentcore_restricted] Custom IAM policy restricts iam:PassRole to Bedrock AgentCore to specific roles - iam [high]
 [iam_role_administratoraccess_policy] IAM role does not have AdministratorAccess policy attached - iam [high]
 [iam_role_cross_account_readonlyaccess_policy] IAM role does not grant ReadOnlyAccess to external AWS accounts - iam [high]
 [iam_role_cross_service_confused_deputy_prevention] IAM service role prevents cross-service confused deputy attack - iam [high]
@@ -161,6 +171,8 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [iam_user_mfa_enabled_console_access] IAM user has MFA enabled for console access or no console password is set - iam [high]
 [iam_user_with_temporary_credentials] IAM user does not use long-lived credentials to access services other than IAM or STS - iam [high]
 [inspector2_active_findings_exist] Inspector2 is enabled with no active findings - inspector2 [high]
+[inspector2_active_findings_kev_within_due_date] Inspector2 has no active findings for CISA Known Exploited Vulnerabilities past their remediation due date - inspector2 [critical]
+[inspector2_active_findings_no_known_exploited_vulnerabilities] Inspector2 has no active findings for CISA Known Exploited Vulnerabilities - inspector2 [high]
 [kafka_cluster_in_transit_encryption_enabled] Kafka cluster has encryption in transit enabled - kafka [high]
 [kafka_cluster_is_public] Kafka cluster is not publicly accessible - kafka [critical]
 [kafka_cluster_mutual_tls_authentication_enabled] Kafka cluster has TLS authentication enabled - kafka [high]
@@ -252,5 +264,5 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [workspaces_volume_encryption_enabled] Amazon WorkSpaces workspace root and user volumes are encrypted - workspaces [high]
 [workspaces_vpc_2private_1public_subnets_nat] Workspace is in a private subnet and its VPC has at least 1 public subnet, 2 private subnets, and a NAT Gateway - workspaces [high]
 
-There are 252 available checks.
+There are 264 available checks.
 
