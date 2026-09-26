@@ -1,4 +1,4 @@
-Prowler 5.39.1 (You are running the latest version, yay!)
+Prowler 5.43.0 (You are running the latest version, yay!)
 [apikeys_api_restricted_with_gemini_api] API key is restricted to specific Google APIs when the Gemini (Generative Language) API is enabled - apikeys [high]
 [apikeys_api_restrictions_configured] API key is restricted to specific Google APIs - apikeys [high]
 [apikeys_key_exists] Project has no active API keys - apikeys [medium]
@@ -93,6 +93,7 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [iam_sa_user_managed_key_rotate_90_days] Service account user-managed key has been rotated within the last 90 days - iam [low]
 [iam_sa_user_managed_key_unused] User-managed service account key was used within the allowed inactivity period - iam [medium]
 [iam_service_account_unused] Service account was used within the configured maximum unused period - iam [medium]
+[iam_workload_identity_pool_provider_attribute_condition] Workload Identity Federation providers trusting a multi-tenant issuer enforce an attribute condition - iam [high]
 [kms_key_not_publicly_accessible] Cloud KMS key has no public IAM access - kms [high]
 [kms_key_rotation_enabled] KMS key has automatic rotation enabled - kms [low]
 [kms_key_rotation_max_90_days] KMS key is rotated every 90 days or less - kms [low]
@@ -109,5 +110,5 @@ Prowler 5.39.1 (You are running the latest version, yay!)
 [secretmanager_secret_not_publicly_accessible] Secret Manager secret is not publicly accessible - secretmanager [critical]
 [secretmanager_secret_rotation_enabled] Secret Manager secret is rotated every 90 days or less - secretmanager [medium]
 
-There are 109 available checks.
+There are 110 available checks.
 
