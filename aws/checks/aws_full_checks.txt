@@ -1,4 +1,4 @@
-Prowler 5.43.0 (You are running the latest version, yay!)
+Prowler 5.44.0 (You are running the latest version, yay!)
 [accessanalyzer_enabled] IAM Access Analyzer is enabled - accessanalyzer [low]
 [accessanalyzer_enabled_without_findings] IAM Access Analyzer analyzer is active and has no active findings - accessanalyzer [low]
 [account_maintain_current_contact_details] AWS account contact information is current - account [medium]
