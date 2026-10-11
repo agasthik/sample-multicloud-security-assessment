@@ -1,4 +1,4 @@
-Prowler 5.43.0 (You are running the latest version, yay!)
+Prowler 5.44.0 (You are running the latest version, yay!)
 [acm_certificates_expiration_check] ACM certificate expires in more than the configured threshold of days - acm [high]
 [acm_certificates_with_secure_key_algorithms] ACM certificate uses a secure key algorithm - acm [high]
 [amplify_app_no_secrets_in_environment] Amplify app has no sensitive credentials in environment variables or build settings - amplify [high]
