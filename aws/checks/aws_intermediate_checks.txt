@@ -1,4 +1,4 @@
-Prowler 5.44.0 (You are running the latest version, yay!)
+Prowler 5.46.0 (You are running the latest version, yay!)
 [acm_certificates_expiration_check] ACM certificate expires in more than the configured threshold of days - acm [high]
 [acm_certificates_with_secure_key_algorithms] ACM certificate uses a secure key algorithm - acm [high]
 [amplify_app_no_secrets_in_environment] Amplify app has no sensitive credentials in environment variables or build settings - amplify [high]
@@ -24,6 +24,7 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [bedrock_guardrail_contextual_grounding_filter_enabled] Bedrock guardrail blocks ungrounded and irrelevant model responses - bedrock [high]
 [bedrock_guardrail_prompt_attack_filter_enabled] Amazon Bedrock guardrail has prompt attack filter strength set to HIGH - bedrock [high]
 [bedrock_guardrail_sensitive_information_filter_enabled] Amazon Bedrock guardrail blocks or masks sensitive information - bedrock [high]
+[bedrock_guardrail_sensitive_information_filter_enforced] Amazon Bedrock guardrail sensitive information filter acts on the output path - bedrock [high]
 [bedrock_knowledge_base_encrypted_with_cmk] Bedrock knowledge base data source is encrypted with a customer-managed KMS key - bedrock [high]
 [bedrock_model_invocation_logs_encryption_enabled] Amazon Bedrock model invocation logs are encrypted in the S3 bucket and KMS-encrypted in the CloudWatch log group - bedrock [high]
 [cloudformation_stack_cdktoolkit_bootstrap_version] CDKToolkit CloudFormation stack has Bootstrap version 21 or higher - cloudformation [high]
@@ -125,6 +126,7 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [elasticbeanstalk_environment_cloudwatch_logging_enabled] Elastic Beanstalk environment streams logs to CloudWatch Logs - elasticbeanstalk [high]
 [elasticbeanstalk_environment_managed_updates_enabled] Elastic Beanstalk environment has managed platform updates enabled - elasticbeanstalk [high]
 [elasticbeanstalk_environment_no_secrets_in_configuration] Elastic Beanstalk environment configuration has no hardcoded secrets - elasticbeanstalk [high]
+[elasticbeanstalk_environment_php_platform_updated] Elastic Beanstalk PHP environment runs a platform version with the fixed PHP release - elasticbeanstalk [critical]
 [emr_cluster_account_public_block_enabled] EMR account has Block Public Access enabled - emr [high]
 [eventbridge_bus_cross_account_access] AWS EventBridge event bus does not allow cross-account access - eventbridge [high]
 [eventbridge_bus_exposed] AWS EventBridge event bus policy does not allow public access - eventbridge [high]
@@ -186,6 +188,7 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [kms_key_enclave_debug_attestation_detected] No Nitro Enclave debug-mode attestation observed against this KMS key - kms [high]
 [kms_key_not_publicly_accessible] Cloud KMS key does not grant access to allUsers or allAuthenticatedUsers - kms [critical]
 [lightsail_database_public] Lightsail database public access disabled - lightsail [high]
+[lightsail_instance_php_blueprint_updated] Lightsail instance created from a PHP blueprint runs a fixed PHP release - lightsail [high]
 [lightsail_instance_public] Lightsail instance has no publicly accessible ports - lightsail [high]
 [macie_automated_sensitive_data_discovery_enabled] Macie automated sensitive data discovery is enabled - macie [high]
 [mq_broker_not_publicly_accessible] Amazon MQ broker is not publicly accessible - mq [high]
@@ -264,5 +267,5 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [workspaces_volume_encryption_enabled] Amazon WorkSpaces workspace root and user volumes are encrypted - workspaces [high]
 [workspaces_vpc_2private_1public_subnets_nat] Workspace is in a private subnet and its VPC has at least 1 public subnet, 2 private subnets, and a NAT Gateway - workspaces [high]
 
-There are 264 available checks.
+There are 267 available checks.
 
