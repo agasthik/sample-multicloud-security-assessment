@@ -1,5 +1,14 @@
-Prowler 5.44.0 (You are running the latest version, yay!)
+Prowler 5.46.0 (You are running the latest version, yay!)
 [aisearch_service_not_publicly_accessible] AI Search service has public network access disabled - aisearch [high]
+[aiservices_account_diagnostic_logging_enabled] AI services account sends audit logs through a diagnostic setting - aiservices [medium]
+[aiservices_account_encrypted_with_cmk] AI services account is encrypted with a customer-managed key - aiservices [medium]
+[aiservices_account_local_auth_disabled] AI services account has local (API key) authentication disabled - aiservices [high]
+[aiservices_account_managed_identity_enabled] AI services account has a managed identity - aiservices [low]
+[aiservices_account_network_acls_default_action_deny] AI services account network access rules deny public traffic by default - aiservices [medium]
+[aiservices_account_outbound_network_restricted] AI services account restricts outbound network access to an allowed FQDN list - aiservices [medium]
+[aiservices_account_public_network_access_disabled] AI services account has public network access disabled - aiservices [high]
+[aiservices_account_uses_private_endpoint] AI services account has an approved private endpoint connection - aiservices [medium]
+[aiservices_deployment_content_filter_prompt_shield_enabled] AI services model deployment blocks jailbreak attempts with Prompt Shields - aiservices [high]
 [aks_cluster_auto_upgrade_enabled] AKS cluster has automatic upgrade enabled - aks [medium]
 [aks_cluster_azure_monitor_enabled] AKS cluster has Azure Monitor metrics enabled - aks [medium]
 [aks_cluster_defender_enabled] AKS cluster has Microsoft Defender security profile enabled - aks [high]
@@ -12,9 +21,9 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [app_client_certificates_on] Web app requires incoming client certificates - app [medium]
 [app_ensure_auth_is_set_up] App Service app has App Service Authentication enabled - app [medium]
 [app_ensure_http_is_redirected_to_https] App Service web app redirects HTTP to HTTPS - app [high]
-[app_ensure_java_version_is_latest] App Service web app uses the latest supported Java version or 17 by default - app [low]
-[app_ensure_php_version_is_latest] App Service web app uses the latest supported PHP version or 8.2 by default - app [low]
-[app_ensure_python_version_is_latest] App Service web app uses the latest supported Python version or 3.12 by default - app [low]
+[app_ensure_java_version_is_latest] App Service web app runs a supported Java version (17 or newer by default) - app [low]
+[app_ensure_php_version_is_latest] App Service web app runs a supported PHP version (8.5 or newer by default) - app [low]
+[app_ensure_python_version_is_latest] App Service web app runs a supported Python version (3.12 or newer by default) - app [low]
 [app_ensure_using_http20] App Service web app has HTTP/2.0 enabled - app [low]
 [app_ftp_deployment_disabled] App Service web app has FTP disabled or FTPS-only enforced - app [high]
 [app_function_access_keys_configured] Function app has function keys configured - app [high]
@@ -191,5 +200,5 @@ Prowler 5.44.0 (You are running the latest version, yay!)
 [vm_sufficient_daily_backup_retention_period] Virtual Machine has a backup policy with a daily retention period meeting the configured minimum - vm [medium]
 [vm_trusted_launch_enabled] Virtual Machine has Trusted Launch with Secure Boot and vTPM enabled - vm [medium]
 
-There are 191 available checks.
+There are 200 available checks.
 
