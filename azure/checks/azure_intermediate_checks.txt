@@ -1,4 +1,4 @@
-Prowler 5.50.0 (You are running the latest version, yay!)
+Prowler 5.52.0 (You are running the latest version, yay!)
 [aisearch_service_not_publicly_accessible] AI Search service has public network access disabled - aisearch [high]
 [aiservices_account_local_auth_disabled] AI services account has local (API key) authentication disabled - aiservices [high]
 [aiservices_account_public_network_access_disabled] AI services account has public network access disabled - aiservices [high]

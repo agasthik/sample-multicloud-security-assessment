@@ -1,4 +1,4 @@
-Prowler 5.50.0 (You are running the latest version, yay!)
+Prowler 5.52.0 (You are running the latest version, yay!)
 [aisearch_service_not_publicly_accessible] AI Search service has public network access disabled - aisearch [high]
 [aiservices_account_diagnostic_logging_enabled] AI services account sends audit logs through a diagnostic setting - aiservices [medium]
 [aiservices_account_encrypted_with_cmk] AI services account is encrypted with a customer-managed key - aiservices [medium]
@@ -12,7 +12,9 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [aks_cluster_auto_upgrade_enabled] AKS cluster has automatic upgrade enabled - aks [medium]
 [aks_cluster_azure_monitor_enabled] AKS cluster has Azure Monitor metrics enabled - aks [medium]
 [aks_cluster_defender_enabled] AKS cluster has Microsoft Defender security profile enabled - aks [high]
+[aks_cluster_kms_cmk_encryption_enabled] AKS cluster encrypts Kubernetes secrets in etcd with a customer-managed Key Vault key - aks [medium]
 [aks_cluster_local_accounts_disabled] AKS cluster has local accounts disabled - aks [high]
+[aks_cluster_node_os_upgrade_channel_enabled] AKS cluster has a managed node OS auto-upgrade channel enabled - aks [medium]
 [aks_cluster_rbac_enabled] AKS cluster has RBAC enabled - aks [high]
 [aks_clusters_created_with_private_nodes] AKS cluster nodes do not have public IP addresses - aks [high]
 [aks_clusters_public_access_disabled] AKS cluster has a private endpoint and node public access is disabled - aks [high]
@@ -52,6 +54,7 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [databricks_workspace_cmk_encryption_enabled] Databricks workspace uses a customer-managed key (CMK) for encryption at rest - databricks [high]
 [databricks_workspace_no_public_ip_enabled] Databricks workspace has secure cluster connectivity (no public IP) - databricks [medium]
 [databricks_workspace_public_network_access_disabled] Databricks workspace has public network access disabled - databricks [high]
+[databricks_workspace_uses_private_endpoint] Databricks workspace has an approved private endpoint connection - databricks [medium]
 [databricks_workspace_vnet_injection_enabled] Databricks workspace is deployed in a customer-managed VNet (VNet Injection enabled) - databricks [high]
 [defender_additional_email_configured_with_a_security_contact] Security contact has additional email addresses configured - defender [low]
 [defender_assessments_vm_endpoint_protection_installed] All virtual machines in the subscription have endpoint protection installed - defender [high]
@@ -204,5 +207,5 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [vm_sufficient_daily_backup_retention_period] Virtual Machine has a backup policy with a daily retention period meeting the configured minimum - vm [medium]
 [vm_trusted_launch_enabled] Virtual Machine has Trusted Launch with Secure Boot and vTPM enabled - vm [medium]
 
-There are 204 available checks.
+There are 207 available checks.
 

@@ -1,4 +1,4 @@
-Prowler 5.50.0 (You are running the latest version, yay!)
+Prowler 5.52.0 (You are running the latest version, yay!)
 [analytics_instance_access_restricted] Oracle Analytics Cloud instance is deployed within a Virtual Cloud Network or restricts public access to allowed sources - analytics [high]
 [cloudguard_enabled] Cloud Guard is enabled in the root compartment of the tenancy - cloudguard [high]
 [compute_instance_in_transit_encryption_enabled] Compute instance has in-transit encryption enabled - compute [high]
@@ -25,10 +25,10 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [integration_instance_access_restricted] Integration Cloud instance uses a private endpoint or a public endpoint with IP or VCN allowlists - integration [high]
 [kms_key_rotation_enabled] Customer-managed KMS key has rotation enabled with interval of 365 days or less - kms [high]
 [network_default_security_list_restricts_traffic] Default security list restricts all traffic except ICMP within VCN - network [high]
-[network_security_group_ingress_from_internet_to_rdp_port] Network security group restricts ingress from 0.0.0.0/0 to port 3389 (RDP) - network [high]
-[network_security_group_ingress_from_internet_to_ssh_port] Network security group restricts ingress from 0.0.0.0/0 to port 22 (SSH) - network [high]
-[network_security_list_ingress_from_internet_to_rdp_port] Security list restricts ingress from 0.0.0.0/0 to port 3389 (RDP) - network [high]
-[network_security_list_ingress_from_internet_to_ssh_port] Security list restricts ingress from 0.0.0.0/0 to port 22 (SSH) - network [high]
+[network_security_group_ingress_from_internet_to_rdp_port] Network security group restricts ingress from the internet to port 3389 (RDP) - network [high]
+[network_security_group_ingress_from_internet_to_ssh_port] Network security group restricts ingress from the internet to port 22 (SSH) - network [high]
+[network_security_list_ingress_from_internet_to_rdp_port] Security list restricts ingress from the internet to port 3389 (RDP) - network [high]
+[network_security_list_ingress_from_internet_to_ssh_port] Security list restricts ingress from the internet to port 22 (SSH) - network [high]
 [objectstorage_bucket_not_publicly_accessible] Object Storage bucket is not publicly accessible - objectstorage [critical]
 
 There are 31 available checks.

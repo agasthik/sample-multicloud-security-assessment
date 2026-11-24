@@ -1,4 +1,4 @@
-Prowler 5.50.0 (You are running the latest version, yay!)
+Prowler 5.52.0 (You are running the latest version, yay!)
 [apikeys_api_restricted_with_gemini_api] API key is restricted to specific Google APIs when the Gemini (Generative Language) API is enabled - apikeys [high]
 [apikeys_api_restrictions_configured] API key is restricted to specific Google APIs - apikeys [high]
 [apikeys_key_exists] Project has no active API keys - apikeys [medium]
@@ -12,6 +12,7 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [cloudfunction_function_not_publicly_accessible] Cloud Function is not publicly invocable - cloudfunction [high]
 [cloudsql_instance_automated_backups] Cloud SQL database instance has automated backups configured - cloudsql [high]
 [cloudsql_instance_cmek_encryption_enabled] Cloud SQL instance is encrypted with a customer-managed key (CMEK) - cloudsql [medium]
+[cloudsql_instance_deletion_protection_enabled] Cloud SQL instance has deletion protection enabled - cloudsql [medium]
 [cloudsql_instance_high_availability_enabled] Cloud SQL instance has high availability (REGIONAL) configured - cloudsql [medium]
 [cloudsql_instance_mysql_local_infile_flag] Cloud SQL MySQL instance has the local_infile database flag set to off - cloudsql [high]
 [cloudsql_instance_mysql_skip_show_database_flag] Cloud SQL MySQL instance has skip_show_database flag set to on - cloudsql [low]
@@ -117,5 +118,5 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [vertexai_workbench_instance_root_access_disabled] Vertex AI Workbench instance has root access disabled - vertexai [medium]
 [vertexai_workbench_instance_terminal_access_disabled] Vertex AI Workbench instance has terminal access disabled - vertexai [medium]
 
-There are 117 available checks.
+There are 118 available checks.
 
