@@ -1,4 +1,4 @@
-Prowler 5.50.0 (You are running the latest version, yay!)
+Prowler 5.52.0 (You are running the latest version, yay!)
 [analytics_instance_access_restricted] Oracle Analytics Cloud instance is deployed within a Virtual Cloud Network or restricts public access to allowed sources - analytics [high]
 [audit_log_retention_period_365_days] Tenancy audit log retention period is 365 days or greater - audit [medium]
 [blockstorage_block_volume_encrypted_with_cmk] Block volume is encrypted with a Customer Managed Key (CMK) - blockstorage [medium]
@@ -42,10 +42,10 @@ Prowler 5.50.0 (You are running the latest version, yay!)
 [integration_instance_access_restricted] Integration Cloud instance uses a private endpoint or a public endpoint with IP or VCN allowlists - integration [high]
 [kms_key_rotation_enabled] Customer-managed KMS key has rotation enabled with interval of 365 days or less - kms [high]
 [network_default_security_list_restricts_traffic] Default security list restricts all traffic except ICMP within VCN - network [high]
-[network_security_group_ingress_from_internet_to_rdp_port] Network security group restricts ingress from 0.0.0.0/0 to port 3389 (RDP) - network [high]
-[network_security_group_ingress_from_internet_to_ssh_port] Network security group restricts ingress from 0.0.0.0/0 to port 22 (SSH) - network [high]
-[network_security_list_ingress_from_internet_to_rdp_port] Security list restricts ingress from 0.0.0.0/0 to port 3389 (RDP) - network [high]
-[network_security_list_ingress_from_internet_to_ssh_port] Security list restricts ingress from 0.0.0.0/0 to port 22 (SSH) - network [high]
+[network_security_group_ingress_from_internet_to_rdp_port] Network security group restricts ingress from the internet to port 3389 (RDP) - network [high]
+[network_security_group_ingress_from_internet_to_ssh_port] Network security group restricts ingress from the internet to port 22 (SSH) - network [high]
+[network_security_list_ingress_from_internet_to_rdp_port] Security list restricts ingress from the internet to port 3389 (RDP) - network [high]
+[network_security_list_ingress_from_internet_to_ssh_port] Security list restricts ingress from the internet to port 22 (SSH) - network [high]
 [network_vcn_subnet_flow_logs_enabled] Subnet has VCN flow logging enabled - network [medium]
 [objectstorage_bucket_encrypted_with_cmk] Object Storage bucket is encrypted with a Customer Managed Key (CMK) - objectstorage [medium]
 [objectstorage_bucket_logging_enabled] Object Storage bucket has write-level logging enabled - objectstorage [medium]
